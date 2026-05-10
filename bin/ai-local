@@ -170,9 +170,9 @@ show_status() {
     echo ""
 
     if is_service_running "$LLAMA_PORT"; then
-        log_success "llama-server (27B) → port $LLAMA_PORT"
+        log_success "llama.cpp (27B)  → port $LLAMA_PORT"
     else
-        log_warn "llama-server (27B) → port $LLAMA_PORT (stopped)"
+        log_warn "llama.cpp (27B)  → port $LLAMA_PORT (stopped)"
     fi
 
     if is_service_running "$LLAMA_PROXY_PORT"; then
@@ -278,26 +278,25 @@ launch_goose_think() {
     OLLAMA_HOST="http://localhost:$OLLAMA_PORT" goose session
 }
 
-launch_qwen_nothink() {
-    local model=${1:-27b}
-    log_info "Starting services for Qwen3.6-${model}..."
-    if [[ "$model" == "27b" ]]; then
-        start_llama_server
-        start_proxy_27b
-        update_qwen_settings "http://127.0.0.1:${LLAMA_PROXY_PORT}/v1" "Qwen3.6-27B-UD-Q4_K_XL.gguf"
-    else
-        check_ollama
-        start_proxy_35b
-        update_qwen_settings "http://127.0.0.1:${OLLAMA_PROXY_PORT}/v1" "qwen3.6:35b-a3b"
+launch_qwen() {
+    local settings_file="$HOME/.qwen/settings.json"
+    if [[ ! -f "$settings_file" ]]; then
+        log_error "qwen-code not configured. Run 'ai-local 27b' or 'ai-local 35b' first."
     fi
-    log_success "Ready. Launch qwen-code with: ai-local qwen"
+    log_info "Launching qwen-code with current settings ($settings_file)"
+    echo "  $(python3 -c "import json; d=json.load(open('$settings_file')); print(f'Model: {d[\"model\"][\"name\"]}')")"
+    echo "  $(python3 -c "import json; d=json.load(open('$settings_file')); print(f'URL: {d[\"security\"][\"auth\"][\"baseUrl\"]}')")"
+    echo ""
+    exec qwen "$@"
 }
 
 launch_qwen_think() {
     check_ollama
-    log_info "qwen-code configured for direct thinking mode (port $OLLAMA_PORT)"
+    log_info "Configuring qwen-code for direct thinking mode (port $OLLAMA_PORT)"
     update_qwen_settings "http://127.0.0.1:${OLLAMA_PORT}/v1" "qwen3.6:35b-a3b"
-    log_success "Ready. Launch qwen-code with: qwen"
+    log_info "Launching qwen-code (thinking ON)"
+    echo ""
+    exec qwen "$@"
 }
 
 # ---- Usage ----
@@ -342,8 +341,8 @@ case "$COMMAND" in
     qwen)
         case "$SUBCOMMAND" in
             think)    launch_qwen_think ;;
-            "")       log_info "qwen-code uses current settings.json — run 'ai-local 27b' or 'ai-local 35b' to configure, then launch with: qwen" ;;
-            *)        usage ;;
+            "")       launch_qwen ;;
+            *)        launch_qwen "$@" ;;
         esac
         ;;
     27b)
