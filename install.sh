@@ -118,6 +118,24 @@ symlink_file "$REPO_DIR/bin/ollama_nothink_proxy.py"     "ollama_nothink_proxy.p
 symlink_file "$REPO_DIR/bin/llama_nonthink_proxy.py"     "llama_nonthink_proxy.py"
 echo ""
 
+# 4b. Setup Goose config symlink
+echo "🔗 Setting up Goose configuration..."
+GOOSE_CONFIG_DIR="${HOME}/.config/goose"
+GOOSE_CONFIG_FILE="${GOOSE_CONFIG_DIR}/config.yaml"
+GOOSE_REPO_CONFIG="${REPO_DIR}/config/goose/config.yaml"
+if [ "$DRY_RUN" = false ]; then
+    mkdir -p "$GOOSE_CONFIG_DIR"
+    # Remove existing file/symlink
+    if [ -L "$GOOSE_CONFIG_FILE" ] || [ -f "$GOOSE_CONFIG_FILE" ]; then
+        rm -f "$GOOSE_CONFIG_FILE"
+    fi
+    ln -s "$GOOSE_REPO_CONFIG" "$GOOSE_CONFIG_FILE"
+    log_info "Symlinked Goose config: $GOOSE_CONFIG_FILE -> $GOOSE_REPO_CONFIG"
+else
+    echo "   [DRY RUN] Would symlink Goose config: $GOOSE_CONFIG_FILE -> $GOOSE_REPO_CONFIG"
+fi
+echo ""
+
 # 5. Setup shell aliases
 echo "🔧 Setting up shell aliases..."
 ALIAS_FILE="$HOME/.zshrc"

@@ -1,0 +1,12 @@
+# Goose Configuration
+# Managed by ai-local-dev
+# This file is symlinked from ~/.config/goose/config.yaml
+# Do not edit directly - use 'ai-local 27b' or 'ai-local 35b' to switch models
+
+extensions:
+  - name: shell
+    enabled: true
+
+OLLAMA_HOST: http://localhost:11435
+GOOSE_PROVIDER: ollama
+GOOSE_MODEL: qwen3.6:35b-a3b

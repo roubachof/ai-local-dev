@@ -283,6 +283,26 @@ update_qwen_settings() {
 EOF
 }
 
+# ---- Goose settings (managed in repo, symlinked to ~/.config/goose/config.yaml) ----
+update_goose_settings() {
+    local provider=$1
+    local model=$2
+    local host=$3
+    local goose_config="$AI_LOCAL_DEV_DIR/config/goose/config.yaml"
+    
+    if [[ ! -f "$goose_config" ]]; then
+        log_error "Goose config template not found: $goose_config"
+    fi
+    
+    # Update the YAML settings using sed
+    # This preserves all other config (like extensions)
+    sed -i '' \
+        -e "s|^OLLAMA_HOST:.*|OLLAMA_HOST: $host|" \
+        -e "s|^GOOSE_PROVIDER:.*|GOOSE_PROVIDER: $provider|" \
+        -e "s|^GOOSE_MODEL:.*|GOOSE_MODEL: $model|" \
+        "$goose_config"
+}
+
 # ---- Launch Goose ----
 check_goose() {
     command -v goose &>/dev/null || log_error "Goose not installed: brew install block-goose-cli"
