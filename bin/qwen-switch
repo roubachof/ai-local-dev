@@ -79,7 +79,13 @@ start_services_27b() {
         else
             PYTHON="python3"
         fi
-        nohup $PYTHON "$PROJECT_ROOT/bin/llama_nonthink_proxy.py" --port "$LLAMA_PROXY_PORT" > /tmp/proxy-27b.log 2>&1 &
+        # Find proxy: installed location takes priority, then dev repo
+        if [[ -f "$HOME/.local/share/ai-local-dev/bin/llama_nonthink_proxy.py" ]]; then
+            PROXY_PATH="$HOME/.local/share/ai-local-dev/bin/llama_nonthink_proxy.py"
+        else
+            PROXY_PATH="$SCRIPT_DIR/llama_nonthink_proxy.py"
+        fi
+        nohup $PYTHON "$PROXY_PATH" --port "$LLAMA_PROXY_PORT" > /tmp/proxy-27b.log 2>&1 &
         echo "   Proxy PID: $!"
         sleep 3
     else
@@ -110,7 +116,13 @@ start_services_35b() {
         else
             PYTHON="python3"
         fi
-        nohup $PYTHON "$PROJECT_ROOT/bin/ollama_nothink_proxy.py" --port "$OLLAMA_PROXY_PORT" > /tmp/proxy-35b.log 2>&1 &
+        # Find proxy: installed location takes priority, then dev repo
+        if [[ -f "$HOME/.local/share/ai-local-dev/bin/ollama_nothink_proxy.py" ]]; then
+            PROXY_PATH="$HOME/.local/share/ai-local-dev/bin/ollama_nothink_proxy.py"
+        else
+            PROXY_PATH="$SCRIPT_DIR/ollama_nothink_proxy.py"
+        fi
+        nohup $PYTHON "$PROXY_PATH" --port "$OLLAMA_PROXY_PORT" > /tmp/proxy-35b.log 2>&1 &
         echo "   Proxy PID: $!"
         sleep 3
     else

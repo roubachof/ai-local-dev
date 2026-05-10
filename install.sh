@@ -93,6 +93,7 @@ echo ""
 # 3. Copy project files
 echo "📦 Copying project files..."
 copy_file "$SCRIPT_DIR/bin/qwen-switch" "$INSTALL_DIR/bin/qwen-switch"
+copy_file "$SCRIPT_DIR/bin/dev.sh" "$INSTALL_DIR/bin/dev.sh"
 copy_file "$SCRIPT_DIR/bin/ollama_nothink_proxy.py" "$INSTALL_DIR/bin/"
 copy_file "$SCRIPT_DIR/bin/llama_nonthink_proxy.py" "$INSTALL_DIR/bin/"
 copy_file "$SCRIPT_DIR/lib/qwen-config.sh" "$INSTALL_DIR/lib/"
@@ -103,7 +104,9 @@ echo ""
 echo "🔗 Creating symlinks..."
 if [ "$DRY_RUN" = false ]; then
     ln -sf "$INSTALL_DIR/bin/qwen-switch" "$BIN_DIR/qwen-switch"
+    ln -sf "$INSTALL_DIR/bin/dev.sh" "$BIN_DIR/dev"
     log_info "Symlinked: qwen-switch -> $BIN_DIR/qwen-switch"
+    log_info "Symlinked: dev.sh -> $BIN_DIR/dev"
 fi
 echo ""
 
@@ -120,6 +123,7 @@ if [ "$DRY_RUN" = false ]; then
         echo "alias qwen-35b='qwen-switch 35b'" >> "$ALIAS_FILE"
         echo "alias qwen-status='qwen-switch status'" >> "$ALIAS_FILE"
         echo "alias qwen-stop='qwen-switch stop'" >> "$ALIAS_FILE"
+        echo "alias dev-goose='dev goose'" >> "$ALIAS_FILE"
         log_info "Added aliases to $ALIAS_FILE"
     else
         log_info "Aliases already exist in $ALIAS_FILE"

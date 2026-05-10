@@ -26,6 +26,7 @@ q22
 ## Architecture
 
 - **`bin/qwen-switch`** — Unified script to switch between Qwen models (27B dense, 35B MoE)
+- **`bin/dev.sh`** — Goose launcher with proxy management (`dev goose`, `dev goose-think`, `dev status`)
 - **`bin/ollama_nothink_proxy.py`** — Disables thinking for Ollama/35B via `reasoning_effort:none`
 - **`bin/llama_nonthink_proxy.py`** — Strips reasoning content for llama-server/27B
 - **`config/.qwen-local.conf`** — Centralized configuration (ports, paths, timeouts)
