@@ -54,7 +54,7 @@ q22
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — How the proxies work
 - [`docs/SETUP_FIRST_TIME.md`](docs/SETUP_FIRST_TIME.md) — Fresh machine setup
 - [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — Common issues and fixes
-- [`docs/SYNC_CONTROL.md`](docs/SYNC_CONTROL.md) — Force thinking on demand
+- [`docs/THINK_CONTROL.md`](docs/THINK_CONTROL.md) — Force thinking on demand
 - [GitHub Workflows](.github/README_GITHUB.md) — CI/CD documentation
 
 ## License
