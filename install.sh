@@ -86,7 +86,24 @@ if [ $MISSING -gt 0 ]; then
     echo ""
 fi
 
-# 2. Ensure bin directory exists
+# 2. Setup Python environment
+echo "🐍 Setting up Python environment..."
+VENV_DIR="$REPO_DIR/.venv"
+if [ "$DRY_RUN" = false ]; then
+    if [ -d "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/python" ]; then
+        log_info "venv already exists: $VENV_DIR"
+    else
+        python3 -m venv "$VENV_DIR"
+        log_info "Created venv: $VENV_DIR"
+    fi
+    "$VENV_DIR/bin/pip" install -q -r "$REPO_DIR/requirements.txt"
+    log_info "Installed Python dependencies (fastapi, httpx, uvicorn)"
+else
+    echo "   [DRY RUN] Would set up venv and install dependencies"
+fi
+echo ""
+
+# 3. Ensure bin directory exists
 echo "📁 Setting up bin directory..."
 if [ "$DRY_RUN" = false ]; then
     mkdir -p "$BIN_DIR"
@@ -94,14 +111,14 @@ fi
 log_info "Bin dir: $BIN_DIR"
 echo ""
 
-# 3. Create symlinks for all executable files
+# 4. Create symlinks for all executable files
 echo "🔗 Creating symlinks..."
 symlink_file "$REPO_DIR/bin/ai-local"                   "ai-local"
 symlink_file "$REPO_DIR/bin/ollama_nothink_proxy.py"     "ollama_nothink_proxy.py"
 symlink_file "$REPO_DIR/bin/llama_nonthink_proxy.py"     "llama_nonthink_proxy.py"
 echo ""
 
-# 4. Setup shell aliases
+# 5. Setup shell aliases
 echo "🔧 Setting up shell aliases..."
 ALIAS_FILE="$HOME/.zshrc"
 if [ "$DRY_RUN" = false ]; then
@@ -125,7 +142,7 @@ else
 fi
 echo ""
 
-# 5. Verify installation
+# 6. Verify installation
 echo "🧪 Verifying installation..."
 if [ "$DRY_RUN" = false ]; then
     if command -v ai-local &> /dev/null; then
@@ -144,7 +161,7 @@ else
 fi
 echo ""
 
-# 6. Next steps
+# 7. Next steps
 echo "🎉 Installation complete!"
 echo ""
 echo "Next steps:"

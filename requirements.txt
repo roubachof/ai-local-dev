@@ -1,0 +1,6 @@
+# Python dependencies for ai-local-dev proxies
+# Only required for llama_nonthink_proxy.py (llama.cpp / 27B)
+# ollama_nothink_proxy.py uses stdlib only
+fastapi>=0.100.0
+httpx>=0.24.0
+uvicorn>=0.23.0
