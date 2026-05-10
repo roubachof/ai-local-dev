@@ -18,11 +18,16 @@
 # ============================================================================
 set -euo pipefail
 
-# ---- Resolve paths ----
-SCRIPT_DIR="$(cd "$(dirname "${(%):-%x}")" && pwd)"
+# ---- Resolve paths (handles symlinks correctly) ----
+# If called via symlink, resolve to the real file location
+_SCRIPT="${(%):-%x}"
+while [[ -L "$_SCRIPT" ]]; do
+    _SCRIPT="$(readlink "$_SCRIPT")"
+done
+SCRIPT_DIR="$(cd "$(dirname "$_SCRIPT")" && pwd)"
 AI_LOCAL_DEV_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Check installed location too
+# Check installed location fallback (for backward compat)
 if [[ ! -f "$AI_LOCAL_DEV_DIR/config/.qwen-local.conf" ]] && \
    [[ -f "$HOME/.local/share/ai-local-dev/config/.qwen-local.conf" ]]; then
     AI_LOCAL_DEV_DIR="$HOME/.local/share/ai-local-dev"
