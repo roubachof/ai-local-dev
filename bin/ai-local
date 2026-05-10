@@ -295,27 +295,65 @@ check_ollama() {
     ollama list 2>/dev/null | grep -q "qwen3.6:35b-a3b" || log_warn "Model qwen3.6:35b-a3b missing: ollama pull qwen3.6:35b-a3b"
 }
 
-launch_goose_nothink() {
+launch_goose() {
     check_goose
-    check_ollama
-    start_proxy_35b
-    log_info "Launching Goose (nothink, via proxy on :$OLLAMA_PROXY_PORT)"
-    echo "  Provider: ollama"
-    echo "  Model   : qwen3.6:35b-a3b"
-    echo "  Endpoint: http://localhost:$OLLAMA_PROXY_PORT (proxy -> :$OLLAMA_PORT)"
-    echo ""
-    OLLAMA_HOST="http://localhost:$OLLAMA_PROXY_PORT" goose session
+    local settings_file="$HOME/.qwen/settings.json"
+    if [[ ! -f "$settings_file" ]]; then
+        log_error "No model configured. Run 'ai-local 27b' or 'ai-local 35b' first."
+    fi
+    # Extract model name and URL from settings
+    local model=$(python3 -c "import json; d=json.load(open('$settings_file')); print(d['model']['name'])" 2>/dev/null)
+    local url=$(python3 -c "import json; d=json.load(open('$settings_file')); print(d['security']['auth']['baseUrl'])" 2>/dev/null)
+    
+    if [[ "$model" == *"35b"* ]]; then
+        # Using Ollama 35B
+        check_ollama
+        start_proxy_35b
+        log_info "Launching Goose (nothink, via 35B proxy on :$OLLAMA_PROXY_PORT)"
+        echo "  Provider: ollama"
+        echo "  Model   : qwen3.6:35b-a3b"
+        echo "  Endpoint: http://localhost:$OLLAMA_PROXY_PORT (proxy -> :$OLLAMA_PORT)"
+        echo ""
+        OLLAMA_HOST="http://localhost:$OLLAMA_PROXY_PORT" goose session
+    else
+        # Using llama.cpp 27B
+        if ! is_service_running "$LLAMA_PORT"; then
+            log_error "llama-server not running on port $LLAMA_PORT. Run 'ai-local 27b' first."
+        fi
+        start_proxy_27b
+        log_info "Launching Goose (nothink, via 27B proxy on :$LLAMA_PROXY_PORT)"
+        echo "  Provider: llama.cpp"
+        echo "  Model   : Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        echo "  Endpoint: http://localhost:$LLAMA_PROXY_PORT (proxy -> :$LLAMA_PORT)"
+        echo ""
+        # For llama.cpp, use a compatible endpoint
+        export OLLAMA_HOST="http://localhost:$LLAMA_PROXY_PORT"
+        goose session
+    fi
 }
 
 launch_goose_think() {
     check_goose
-    check_ollama
-    log_info "Launching Goose (think ON, direct to Ollama :$OLLAMA_PORT)"
-    echo "  Provider: ollama"
-    echo "  Model   : qwen3.6:35b-a3b"
-    echo "  Endpoint: http://localhost:$OLLAMA_PORT (direct)"
-    echo ""
-    OLLAMA_HOST="http://localhost:$OLLAMA_PORT" goose session
+    local settings_file="$HOME/.qwen/settings.json"
+    if [[ ! -f "$settings_file" ]]; then
+        log_error "No model configured. Run 'ai-local 27b' or 'ai-local 35b' first."
+    fi
+    local model=$(python3 -c "import json; d=json.load(open('$settings_file')); print(d['model']['name'])" 2>/dev/null)
+    
+    if [[ "$model" == *"35b"* ]]; then
+        # Using Ollama 35B with thinking ON
+        check_ollama
+        log_info "Launching Goose (think ON, direct to Ollama :$OLLAMA_PORT)"
+        echo "  Provider: ollama"
+        echo "  Model   : qwen3.6:35b-a3b"
+        echo "  Endpoint: http://localhost:$OLLAMA_PORT (direct, thinking ON)"
+        echo ""
+        OLLAMA_HOST="http://localhost:$OLLAMA_PORT" goose session
+    else
+        # Using llama.cpp 27B (no thinking support)
+        log_warn "Thinking mode not supported for 27B model. Launching without thinking."
+        launch_goose
+    fi
 }
 
 launch_qwen() {
@@ -374,7 +412,7 @@ case "$COMMAND" in
     goose)
         case "$SUBCOMMAND" in
             think)    launch_goose_think ;;
-            "")       launch_goose_nothink ;;
+            "")       launch_goose ;;
             *)        usage ;;
         esac
         ;;
