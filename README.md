@@ -15,18 +15,20 @@ cd ai-local-dev
 ./install.sh
 
 # Switch to 27B model
-qwen-switch 27b
+ai-local 27b
 
-# Launch qwen-code
-q22
+# Launch Goose (nothink by default)
+ai-local goose
+
+# Launch Goose with thinking ON
+ai-local goose think
 ```
 
 ---
 
 ## Architecture
 
-- **`bin/qwen-switch`** — Unified script to switch between Qwen models (27B dense, 35B MoE)
-- **`bin/dev.sh`** — Goose launcher with proxy management (`dev goose`, `dev goose-think`, `dev status`)
+- **`bin/ai-local`** — Unified orchestrator for models, proxies, and agents
 - **`bin/ollama_nothink_proxy.py`** — Disables thinking for Ollama/35B via `reasoning_effort:none`
 - **`bin/llama_nonthink_proxy.py`** — Strips reasoning content for llama-server/27B
 - **`config/.qwen-local.conf`** — Centralized configuration (ports, paths, timeouts)
@@ -42,6 +44,7 @@ q22
 | **Health Checks** | Automatic service status monitoring |
 | **Easy Install** | One-command setup on new machines |
 | **Config Centralization** | All settings in one file |
+| **Unified CLI** | Single entry point: `ai-local`
 
 ## Models
 
@@ -56,7 +59,6 @@ q22
 - [`docs/SETUP_FIRST_TIME.md`](docs/SETUP_FIRST_TIME.md) — Fresh machine setup
 - [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — Common issues and fixes
 - [`docs/THINK_CONTROL.md`](docs/THINK_CONTROL.md) — Force thinking on demand
-- [GitHub Workflows](.github/README_GITHUB.md) — CI/CD documentation
 
 ## License
 

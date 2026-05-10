@@ -42,17 +42,17 @@
 
 ### 3. Orchestrator
 
-#### `bin/qwen-switch`
-- Unified script to start/stop/switch between models
+#### `bin/ai-local`
+- Unified CLI to start/stop models, launch agents, and manage proxies
 - Sources configuration from `config/.qwen-local.conf`
 - Updates `~/.qwen/settings.json` for qwen-code
-- Commands: `27b`, `35b`, `status`, `stop`, `show-config`
+- Commands: `ai-local {goose|qwen|27b|35b|status|stop|config|proxy}`
 
 ## Data Flow
 
 ### Request Flow (27B Model)
 ```
-qwen-code → bin/qwen-switch → llama_nonthink_proxy.py → llama-server
+ai-local 27b → llama-server → llama_nonthink_proxy.py → qwen-code
                     ↓
             settings.json updated with:
             - model: Qwen3.6-27B-UD-Q4_K_XL.gguf

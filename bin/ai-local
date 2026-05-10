@@ -1,0 +1,383 @@
+#!/usr/bin/env zsh
+# ============================================================================
+# ai-local — Unified Local AI Orchestrator
+# Part of ai-local-dev: https://github.com/roubachof/ai-local-dev
+#
+# Usage:
+#   ai-local goose              # Launch Goose (nothink, via proxy) [default]
+#   ai-local qwen               # Launch qwen-code (nothink, via proxy) [default]
+#   ai-local goose think        # Launch Goose with thinking ON (direct)
+#   ai-local qwen think         # Launch qwen-code with thinking ON (direct)
+#   ai-local 27b                # Start Qwen3.6-27B services (llama-server + proxy)
+#   ai-local 35b                # Start Qwen3.6-35B-A3B services (Ollama + proxy)
+#   ai-local status             # Show status of all services
+#   ai-local stop               # Stop all services
+#   ai-local config             # Show current configuration
+#   ai-local proxy start        # Start proxy only
+#   ai-local proxy stop         # Stop proxy only
+# ============================================================================
+set -euo pipefail
+
+# ---- Resolve paths ----
+SCRIPT_DIR="$(cd "$(dirname "${(%):-%x}")" && pwd)"
+AI_LOCAL_DEV_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Check installed location too
+if [[ ! -f "$AI_LOCAL_DEV_DIR/config/.qwen-local.conf" ]] && \
+   [[ -f "$HOME/.local/share/ai-local-dev/config/.qwen-local.conf" ]]; then
+    AI_LOCAL_DEV_DIR="$HOME/.local/share/ai-local-dev"
+fi
+
+CONF_FILE="$AI_LOCAL_DEV_DIR/config/.qwen-local.conf"
+
+# ---- Source config ----
+if [[ -f "$CONF_FILE" ]]; then
+    source "$CONF_FILE"
+fi
+
+# ---- Defaults ----
+LLAMA_PORT="${LLAMA_PORT:-8080}"
+LLAMA_PROXY_PORT="${LLAMA_PROXY_PORT:-8081}"
+OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+OLLAMA_PROXY_PORT="${OLLAMA_PROXY_PORT:-11435}"
+QWEN_27B_MODEL="${QWEN_27B_MODEL:-$HOME/.local/share/llama-models/Qwen3.6-27B-UD-Q4_K_XL.gguf}"
+LLAMA_CTX_SIZE="${LLAMA_CTX_SIZE:-131072}"
+LLAMA_TEMP="${LLAMA_TEMP:-0.6}"
+LLAMA_TOP_P="${LLAMA_TOP_P:-0.95}"
+LLAMA_TOP_K="${LLAMA_TOP_K:-20}"
+LLAMA_GPU_LAYERS="${LLAMA_GPU_LAYERS:-99}"
+PROXY_TIMEOUT="${PROXY_TIMEOUT:-600}"
+SERVICE_STARTUP_WAIT="${SERVICE_STARTUP_WAIT:-10}"
+
+# ---- Python resolution ----
+find_python() {
+    if [[ -f "$AI_LOCAL_DEV_DIR/.venv/bin/python" ]]; then
+        echo "$AI_LOCAL_DEV_DIR/.venv/bin/python"
+    elif [[ -f "$(pwd)/.venv/bin/python" ]]; then
+        echo "$(pwd)/.venv/bin/python"
+    else
+        echo "python3"
+    fi
+}
+
+# ---- Helpers ----
+log_info()    { echo "📌 $*"; }
+log_warn()    { echo "⚠️  $*"; }
+log_success() { echo "✅ $*"; }
+log_error()   { echo "❌ $*"; exit 1; }
+
+is_service_running() {
+    curl -sf "http://127.0.0.1:$1/health" >/dev/null 2>&1
+}
+
+wait_for_service() {
+    local port=$1
+    local attempt=0
+    while [ $attempt -lt 30 ]; do
+        if is_service_running "$port"; then
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    log_warn "Service on port $port did not become healthy within 30s"
+    return 1
+}
+
+# ---- Service start/stop ----
+start_llama_server() {
+    if is_service_running "$LLAMA_PORT"; then
+        log_success "llama-server already running on port $LLAMA_PORT"
+        return 0
+    fi
+    if [[ ! -f "$QWEN_27B_MODEL" ]]; then
+        log_error "Model not found: $QWEN_27B_MODEL"
+    fi
+    log_info "Starting llama-server on port $LLAMA_PORT..."
+    nohup llama-server \
+        --model "$QWEN_27B_MODEL" \
+        --port "$LLAMA_PORT" \
+        --ctx-size "$LLAMA_CTX_SIZE" \
+        --temp "$LLAMA_TEMP" \
+        --top-p "$LLAMA_TOP_P" \
+        --top-k "$LLAMA_TOP_K" \
+        --n-gpu-layers "$LLAMA_GPU_LAYERS" \
+        > /tmp/llama-server.log 2>&1 &
+    log_info "llama-server PID: $!"
+    sleep "$SERVICE_STARTUP_WAIT"
+}
+
+start_ollama() {
+    if is_service_running "$OLLAMA_PORT"; then
+        log_success "Ollama already running on port $OLLAMA_PORT"
+        return 0
+    fi
+    log_info "Starting Ollama on port $OLLAMA_PORT..."
+    nohup ollama serve > /tmp/ollama.log 2>&1 &
+    sleep "$SERVICE_STARTUP_WAIT"
+}
+
+start_proxy_27b() {
+    if is_service_running "$LLAMA_PROXY_PORT"; then
+        log_success "llama nothink proxy already running on port $LLAMA_PROXY_PORT"
+        return 0
+    fi
+    local py
+    py=$(find_python)
+    log_info "Starting llama nothink proxy on port $LLAMA_PROXY_PORT..."
+    nohup "$py" "$AI_LOCAL_DEV_DIR/bin/llama_nonthink_proxy.py" --port "$LLAMA_PROXY_PORT" \
+        > /tmp/proxy-27b.log 2>&1 &
+    log_info "Proxy PID: $!"
+    sleep 3
+}
+
+start_proxy_35b() {
+    if is_service_running "$OLLAMA_PROXY_PORT"; then
+        log_success "Ollama nothink proxy already running on port $OLLAMA_PROXY_PORT"
+        return 0
+    fi
+    local py
+    py=$(find_python)
+    log_info "Starting Ollama nothink proxy on port $OLLAMA_PROXY_PORT..."
+    nohup "$py" "$AI_LOCAL_DEV_DIR/bin/ollama_nothink_proxy.py" --port "$OLLAMA_PROXY_PORT" \
+        > /tmp/proxy-35b.log 2>&1 &
+    log_info "Proxy PID: $!"
+    sleep 3
+}
+
+stop_all() {
+    log_info "Stopping all services..."
+    pkill -f "llama-server.*${LLAMA_PORT}" 2>/dev/null || true
+    pkill -f "llama_nonthink_proxy.py.*${LLAMA_PROXY_PORT}" 2>/dev/null || true
+    pkill -f "ollama_nothink_proxy.py.*${OLLAMA_PROXY_PORT}" 2>/dev/null || true
+    log_success "All services stopped."
+}
+
+stop_proxy() {
+    pkill -f "llama_nonthink_proxy.py.*${LLAMA_PROXY_PORT}" 2>/dev/null || true
+    pkill -f "ollama_nothink_proxy.py.*${OLLAMA_PROXY_PORT}" 2>/dev/null || true
+    log_success "Proxies stopped."
+}
+
+# ---- Status ----
+show_status() {
+    echo "=== ai-local Status ==="
+    echo ""
+
+    if is_service_running "$LLAMA_PORT"; then
+        log_success "llama-server (27B) → port $LLAMA_PORT"
+    else
+        log_warn "llama-server (27B) → port $LLAMA_PORT (stopped)"
+    fi
+
+    if is_service_running "$LLAMA_PROXY_PORT"; then
+        log_success "llama nothink proxy → port $LLAMA_PROXY_PORT"
+    else
+        log_warn "llama nothink proxy → port $LLAMA_PROXY_PORT (stopped)"
+    fi
+
+    if is_service_running "$OLLAMA_PORT"; then
+        log_success "Ollama (35B) → port $OLLAMA_PORT"
+    else
+        log_warn "Ollama (35B) → port $OLLAMA_PORT (stopped)"
+    fi
+
+    if is_service_running "$OLLAMA_PROXY_PORT"; then
+        log_success "Ollama nothink proxy → port $OLLAMA_PROXY_PORT"
+    else
+        log_warn "Ollama nothink proxy → port $OLLAMA_PROXY_PORT (stopped)"
+    fi
+
+    echo ""
+    echo "Config: $CONF_FILE"
+    [[ -f "$CONF_FILE" ]] && echo "  ✅ Loaded" || echo "  ⚠️  Using defaults"
+}
+
+show_config() {
+    echo "=== ai-local Configuration ==="
+    echo ""
+    echo "LLAMA_PORT=$LLAMA_PORT"
+    echo "LLAMA_PROXY_PORT=$LLAMA_PROXY_PORT"
+    echo "OLLAMA_PORT=$OLLAMA_PORT"
+    echo "OLLAMA_PROXY_PORT=$OLLAMA_PROXY_PORT"
+    echo "QWEN_27B_MODEL=$QWEN_27B_MODEL"
+    echo "LLAMA_CTX_SIZE=$LLAMA_CTX_SIZE"
+    echo "LLAMA_TEMP=$LLAMA_TEMP"
+    echo "LLAMA_TOP_P=$LLAMA_TOP_P"
+    echo "LLAMA_TOP_K=$LLAMA_TOP_K"
+    echo "LLAMA_GPU_LAYERS=$LLAMA_GPU_LAYERS"
+    echo "PROXY_TIMEOUT=$PROXY_TIMEOUT"
+    echo "SERVICE_STARTUP_WAIT=$SERVICE_STARTUP_WAIT"
+}
+
+# ---- qwen-code settings ----
+update_qwen_settings() {
+    local base_url=$1
+    local model_name=$2
+    local settings_file="$HOME/.qwen/settings.json"
+    mkdir -p "$(dirname "$settings_file")"
+    cat > "$settings_file" << EOF
+{
+  "security": {
+    "auth": {
+      "selectedType": "openai",
+      "apiKey": "sk-local-no-auth",
+      "baseUrl": "${base_url}"
+    }
+  },
+  "model": {
+    "name": "${model_name}",
+    "sessionTokenLimit": 32000,
+    "generationConfig": {
+      "timeout": 300000,
+      "maxRetries": 1
+    }
+  },
+  "\$version": 4
+}
+EOF
+}
+
+# ---- Launch Goose ----
+check_goose() {
+    command -v goose &>/dev/null || log_error "Goose not installed: brew install block-goose-cli"
+    log_success "Goose $(goose --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo unknown) available"
+}
+
+check_ollama() {
+    command -v ollama &>/dev/null || log_error "Ollama not installed: brew install ollama"
+    curl -sf http://localhost:$OLLAMA_PORT/api/tags >/dev/null 2>&1 || log_error "Ollama not running: ollama serve"
+    ollama list 2>/dev/null | grep -q "qwen3.6:35b-a3b" || log_warn "Model qwen3.6:35b-a3b missing: ollama pull qwen3.6:35b-a3b"
+}
+
+launch_goose_nothink() {
+    check_goose
+    check_ollama
+    start_proxy_35b
+    log_info "Launching Goose (nothink, via proxy on :$OLLAMA_PROXY_PORT)"
+    echo "  Provider: ollama"
+    echo "  Model   : qwen3.6:35b-a3b"
+    echo "  Endpoint: http://localhost:$OLLAMA_PROXY_PORT (proxy -> :$OLLAMA_PORT)"
+    echo ""
+    OLLAMA_HOST="http://localhost:$OLLAMA_PROXY_PORT" goose session
+}
+
+launch_goose_think() {
+    check_goose
+    check_ollama
+    log_info "Launching Goose (think ON, direct to Ollama :$OLLAMA_PORT)"
+    echo "  Provider: ollama"
+    echo "  Model   : qwen3.6:35b-a3b"
+    echo "  Endpoint: http://localhost:$OLLAMA_PORT (direct)"
+    echo ""
+    OLLAMA_HOST="http://localhost:$OLLAMA_PORT" goose session
+}
+
+launch_qwen_nothink() {
+    local model=${1:-27b}
+    log_info "Starting services for Qwen3.6-${model}..."
+    if [[ "$model" == "27b" ]]; then
+        start_llama_server
+        start_proxy_27b
+        update_qwen_settings "http://127.0.0.1:${LLAMA_PROXY_PORT}/v1" "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+    else
+        check_ollama
+        start_proxy_35b
+        update_qwen_settings "http://127.0.0.1:${OLLAMA_PROXY_PORT}/v1" "qwen3.6:35b-a3b"
+    fi
+    log_success "Ready. Launch qwen-code with: ai-local qwen"
+}
+
+launch_qwen_think() {
+    check_ollama
+    log_info "qwen-code configured for direct thinking mode (port $OLLAMA_PORT)"
+    update_qwen_settings "http://127.0.0.1:${OLLAMA_PORT}/v1" "qwen3.6:35b-a3b"
+    log_success "Ready. Launch qwen-code with: qwen"
+}
+
+# ---- Usage ----
+usage() {
+    cat << 'EOF'
+ai-local — Unified Local AI Orchestrator
+
+Usage:
+  ai-local goose              Launch Goose (nothink, via proxy) [default]
+  ai-local qwen               Launch qwen-code (via current settings)
+  ai-local goose think        Launch Goose with thinking ON (direct)
+  ai-local qwen think         Configure qwen-code for thinking ON
+  ai-local 27b                Start Qwen3.6-27B services (llama-server + proxy)
+  ai-local 35b                Start Qwen3.6-35B-A3B services (Ollama + proxy)
+  ai-local status             Show status of all services
+  ai-local stop               Stop all services
+  ai-local config             Show current configuration
+  ai-local proxy start        Start nothink proxies
+  ai-local proxy stop         Stop nothink proxies
+
+Environment:
+  AI_LOCAL_DEV_DIR    Override path to ai-local-dev installation
+  OLLAMA_NOTHINK_PROXY_PORT  Override proxy port (default: 11435)
+
+Default behavior is nothink (thinking OFF) for performance.
+Use 'think' subcommand to enable thinking mode.
+EOF
+}
+
+# ---- Main ----
+COMMAND="${1:-}"
+SUBCOMMAND="${2:-}"
+
+case "$COMMAND" in
+    goose)
+        case "$SUBCOMMAND" in
+            think)    launch_goose_think ;;
+            "")       launch_goose_nothink ;;
+            *)        usage ;;
+        esac
+        ;;
+    qwen)
+        case "$SUBCOMMAND" in
+            think)    launch_qwen_think ;;
+            "")       log_info "qwen-code uses current settings.json — run 'ai-local 27b' or 'ai-local 35b' to configure, then launch with: qwen" ;;
+            *)        usage ;;
+        esac
+        ;;
+    27b)
+        start_llama_server
+        start_proxy_27b
+        update_qwen_settings "http://127.0.0.1:${LLAMA_PROXY_PORT}/v1" "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        log_success "Qwen3.6-27B ready. Launch with: ai-local goose or qwen"
+        ;;
+    35b)
+        check_ollama
+        start_proxy_35b
+        update_qwen_settings "http://127.0.0.1:${OLLAMA_PROXY_PORT}/v1" "qwen3.6:35b-a3b"
+        log_success "Qwen3.6-35B-A3B ready. Launch with: ai-local goose or qwen"
+        ;;
+    status)
+        show_status
+        ;;
+    stop)
+        stop_all
+        ;;
+    config)
+        show_config
+        ;;
+    proxy)
+        case "$SUBCOMMAND" in
+            start)  start_proxy_27b; start_proxy_35b ;;
+            stop)   stop_proxy ;;
+            status) show_status ;;
+            *)      usage ;;
+        esac
+        ;;
+    help|--help|-h)
+        usage
+        ;;
+    "")
+        usage
+        ;;
+    *)
+        log_error "Unknown command: $COMMAND"
+        usage
+        ;;
+esac

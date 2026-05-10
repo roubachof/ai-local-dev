@@ -12,7 +12,7 @@ Both proxies in `ai-local-dev` disable model thinking by default, but you can **
 
 **Enable thinking:**
 ```bash
-OLLAMA_PROXY_FORCE_THINK=1 qwen-switch 35b
+OLLAMA_PROXY_FORCE_THINK=1 ai-local 35b
 ```
 
 ### Qwen3.6-27B (llama-server)
@@ -21,7 +21,7 @@ OLLAMA_PROXY_FORCE_THINK=1 qwen-switch 35b
 
 **Enable thinking:**
 ```bash
-LLAMA_PROXY_FORCE_THINK=1 qwen-switch 27b
+LLAMA_PROXY_FORCE_THINK=1 ai-local 27b
 ```
 
 ## When to Enable Thinking
@@ -38,10 +38,10 @@ LLAMA_PROXY_FORCE_THINK=1 qwen-switch 27b
 ### Thinking not enabled even with FORCE_THINK=1
 
 1. **Restart the proxy:**
-   ```bash
-   qwen-switch stop
-   OLLAMA_PROXY_FORCE_THINK=1 qwen-switch 35b
-   ```
+```bash
+ai-local stop
+OLLAMA_PROXY_FORCE_THINK=1 ai-local 35b
+```
 
 2. **Check proxy logs:**
    ```bash

@@ -82,17 +82,21 @@ cd ai-local-dev
 
 ```bash
 # Check status
-qwen-switch status
+ai-local status
 
 # Start 27B model
-qwen-switch 27b
+ai-local 27b
 
 # Start 35B model
-qwen-switch 35b
+ai-local 35b
+
+# Launch Goose
+ai-local goose
 ```
 
 ## Next Steps
 
-1. Launch qwen-code: `q22`
-2. Check logs: `tail -f /tmp/llama-server.log` or `tail -f /tmp/proxy-27b.log`
-3. Customize config: `cp config/.qwen-local.conf config/.qwen-local.conf.local` and edit
+1. Launch Goose: `ai-local goose`
+2. Launch with thinking: `ai-local goose think`
+3. Check logs: `tail -f /tmp/llama-server.log` or `tail -f /tmp/proxy-27b.log`
+4. Customize config: `cp config/.qwen-local.conf config/.qwen-local.conf.local` and edit

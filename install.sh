@@ -92,8 +92,7 @@ echo ""
 
 # 3. Copy project files
 echo "📦 Copying project files..."
-copy_file "$SCRIPT_DIR/bin/qwen-switch" "$INSTALL_DIR/bin/qwen-switch"
-copy_file "$SCRIPT_DIR/bin/dev.sh" "$INSTALL_DIR/bin/dev.sh"
+copy_file "$SCRIPT_DIR/bin/ai-local" "$INSTALL_DIR/bin/ai-local"
 copy_file "$SCRIPT_DIR/bin/ollama_nothink_proxy.py" "$INSTALL_DIR/bin/"
 copy_file "$SCRIPT_DIR/bin/llama_nonthink_proxy.py" "$INSTALL_DIR/bin/"
 copy_file "$SCRIPT_DIR/lib/qwen-config.sh" "$INSTALL_DIR/lib/"
@@ -103,10 +102,8 @@ echo ""
 # 4. Create symlinks in PATH
 echo "🔗 Creating symlinks..."
 if [ "$DRY_RUN" = false ]; then
-    ln -sf "$INSTALL_DIR/bin/qwen-switch" "$BIN_DIR/qwen-switch"
-    ln -sf "$INSTALL_DIR/bin/dev.sh" "$BIN_DIR/dev"
-    log_info "Symlinked: qwen-switch -> $BIN_DIR/qwen-switch"
-    log_info "Symlinked: dev.sh -> $BIN_DIR/dev"
+    ln -sf "$INSTALL_DIR/bin/ai-local" "$BIN_DIR/ai-local"
+    log_info "Symlinked: ai-local -> $BIN_DIR/ai-local"
 fi
 echo ""
 
@@ -114,16 +111,15 @@ echo ""
 echo "🔧 Setting up shell aliases..."
 ALIAS_FILE="$HOME/.zshrc"
 if [ "$DRY_RUN" = false ]; then
-    # Add aliases if they don't already exist
-    if ! grep -q "q22=" "$ALIAS_FILE" 2>/dev/null; then
+    if ! grep -q "ai-local" "$ALIAS_FILE" 2>/dev/null; then
         echo "" >> "$ALIAS_FILE"
         echo "# ai-local-dev aliases" >> "$ALIAS_FILE"
-        echo "alias q22='node --version >/dev/null 2>&1 && q22'" >> "$ALIAS_FILE"
-        echo "alias qwen-27b='qwen-switch 27b'" >> "$ALIAS_FILE"
-        echo "alias qwen-35b='qwen-switch 35b'" >> "$ALIAS_FILE"
-        echo "alias qwen-status='qwen-switch status'" >> "$ALIAS_FILE"
-        echo "alias qwen-stop='qwen-switch stop'" >> "$ALIAS_FILE"
-        echo "alias dev-goose='dev goose'" >> "$ALIAS_FILE"
+        echo "alias ai27b='ai-local 27b'" >> "$ALIAS_FILE"
+        echo "alias ai35b='ai-local 35b'" >> "$ALIAS_FILE"
+        echo "alias ai-status='ai-local status'" >> "$ALIAS_FILE"
+        echo "alias ai-stop='ai-local stop'" >> "$ALIAS_FILE"
+        echo "alias ai-goose='ai-local goose'" >> "$ALIAS_FILE"
+        echo "alias ai-goose-think='ai-local goose think'" >> "$ALIAS_FILE"
         log_info "Added aliases to $ALIAS_FILE"
     else
         log_info "Aliases already exist in $ALIAS_FILE"
@@ -136,13 +132,13 @@ echo ""
 # 6. Verify installation
 echo "🧪 Verifying installation..."
 if [ "$DRY_RUN" = false ]; then
-    if command -v qwen-switch &> /dev/null; then
-        log_info "qwen-switch is available in PATH"
+    if command -v ai-local &> /dev/null; then
+        log_info "ai-local is available in PATH"
         echo ""
         echo "📋 Current status:"
-        qwen-switch status
+        ai-local status
     else
-        log_error "qwen-switch not found in PATH"
+        log_error "ai-local not found in PATH"
         echo "   Make sure $BIN_DIR is in your PATH"
         echo "   Add to ~/.zshrc: export PATH=\"\$HOME/.local/bin:\$PATH\""
         exit 1
@@ -157,9 +153,9 @@ echo "🎉 Installation complete!"
 echo ""
 echo "Next steps:"
 echo "   1. Source your shell config: source $ALIAS_FILE"
-echo "   2. Check status: qwen-switch status"
-echo "   3. Start a model: qwen-switch 27b"
-echo "   4. Launch qwen-code: q22"
+echo "   2. Check status: ai-local status"
+echo "   3. Start a model: ai-local 27b"
+echo "   4. Launch Goose: ai-local goose"
 echo ""
 echo "📖 Documentation: $INSTALL_DIR/docs/"
 echo ""
