@@ -170,8 +170,12 @@ get_process_memory() {
     if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
         return
     fi
-    # Get RSS memory in MB (works on macOS and Linux)
-    ps -p "$pid" -o rss= 2>/dev/null | awk '{print int($1/1024) "MB"}'
+    # On macOS: use 'ps' for RSS, but note that models use VRAM heavily
+    # VRAM is not reported by ps, but visible in Activity Monitor
+    local rss_kb=$(ps -p "$pid" -o rss= 2>/dev/null)
+    if [[ -n "$rss_kb" ]]; then
+        echo "$(awk "BEGIN {print int($rss_kb/1024)}")MB RAM"
+    fi
 }
 
 show_status() {
