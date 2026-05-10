@@ -3,6 +3,9 @@
 # ai-local-dev Installer
 # Sets up local AI infrastructure on a new machine
 # Usage: ./install.sh [--dry-run]
+#
+# This installer creates SYMLINKS from ~/.local/bin/ to this repo directory.
+# No files are copied — all updates happen via `git pull` in the repo.
 # ============================================================================
 set -euo pipefail
 
@@ -13,9 +16,8 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # ---- Configuration ----
-INSTALL_DIR="${HOME}/.local/share/ai-local-dev"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${HOME}/.local/bin"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY_RUN=false
 
 # ---- Parse arguments ----
@@ -29,9 +31,9 @@ for arg in "$@"; do
 done
 
 # ---- Helper functions ----
-log_info() { echo -e "${GREEN}✅ $1${NC}"; }
-log_warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
-log_error() { echo -e "${RED}❌ $1${NC}"; }
+log_info()    { echo -e "${GREEN}✅ $1${NC}"; }
+log_warn()    { echo -e "${YELLOW}⚠️  $1${NC}"; }
+log_error()   { echo -e "${RED}❌ $1${NC}"; }
 
 check_prerequisite() {
     local cmd=$1
@@ -45,21 +47,25 @@ check_prerequisite() {
     fi
 }
 
-copy_file() {
-    local src=$1
-    local dst=$2
+symlink_file() {
+    local src="$1"
+    local name="$2"
+    local dst="$BIN_DIR/$name"
     if [ "$DRY_RUN" = true ]; then
-        echo "   [DRY RUN] Would copy: $src -> $dst"
+        echo "   [DRY RUN] Would symlink: $src -> $dst"
         return
     fi
-    mkdir -p "$(dirname "$dst")"
-    cp "$src" "$dst"
-    chmod +x "$dst"
-    log_info "Copied: $src -> $dst"
+    # Remove existing file/symlink
+    if [ -L "$dst" ] || [ -f "$dst" ]; then
+        rm -f "$dst"
+    fi
+    ln -s "$src" "$dst"
+    log_info "Symlinked: $name -> $src"
 }
 
 # ---- Main Installation ----
 echo "=== ai-local-dev Installer ==="
+echo "  Repo: $REPO_DIR"
 echo ""
 
 # 1. Check prerequisites
@@ -80,46 +86,36 @@ if [ $MISSING -gt 0 ]; then
     echo ""
 fi
 
-# 2. Create installation directory
-echo "📁 Setting up installation directory..."
+# 2. Ensure bin directory exists
+echo "📁 Setting up bin directory..."
 if [ "$DRY_RUN" = false ]; then
-    mkdir -p "$INSTALL_DIR"
     mkdir -p "$BIN_DIR"
 fi
-log_info "Install dir: $INSTALL_DIR"
 log_info "Bin dir: $BIN_DIR"
 echo ""
 
-# 3. Copy project files
-echo "📦 Copying project files..."
-copy_file "$SCRIPT_DIR/bin/ai-local" "$INSTALL_DIR/bin/ai-local"
-copy_file "$SCRIPT_DIR/bin/ollama_nothink_proxy.py" "$INSTALL_DIR/bin/"
-copy_file "$SCRIPT_DIR/bin/llama_nonthink_proxy.py" "$INSTALL_DIR/bin/"
-copy_file "$SCRIPT_DIR/lib/qwen-config.sh" "$INSTALL_DIR/lib/"
-copy_file "$SCRIPT_DIR/config/.qwen-local.conf" "$INSTALL_DIR/config/"
-echo ""
-
-# 4. Create symlinks in PATH
+# 3. Create symlinks for all executable files
 echo "🔗 Creating symlinks..."
-if [ "$DRY_RUN" = false ]; then
-    ln -sf "$INSTALL_DIR/bin/ai-local" "$BIN_DIR/ai-local"
-    log_info "Symlinked: ai-local -> $BIN_DIR/ai-local"
-fi
+symlink_file "$REPO_DIR/bin/ai-local"                   "ai-local"
+symlink_file "$REPO_DIR/bin/ollama_nothink_proxy.py"     "ollama_nothink_proxy.py"
+symlink_file "$REPO_DIR/bin/llama_nonthink_proxy.py"     "llama_nonthink_proxy.py"
 echo ""
 
-# 5. Setup shell aliases
+# 4. Setup shell aliases
 echo "🔧 Setting up shell aliases..."
 ALIAS_FILE="$HOME/.zshrc"
 if [ "$DRY_RUN" = false ]; then
-    if ! grep -q "ai-local" "$ALIAS_FILE" 2>/dev/null; then
-        echo "" >> "$ALIAS_FILE"
-        echo "# ai-local-dev aliases" >> "$ALIAS_FILE"
-        echo "alias ai27b='ai-local 27b'" >> "$ALIAS_FILE"
-        echo "alias ai35b='ai-local 35b'" >> "$ALIAS_FILE"
-        echo "alias ai-status='ai-local status'" >> "$ALIAS_FILE"
-        echo "alias ai-stop='ai-local stop'" >> "$ALIAS_FILE"
-        echo "alias ai-goose='ai-local goose'" >> "$ALIAS_FILE"
-        echo "alias ai-goose-think='ai-local goose think'" >> "$ALIAS_FILE"
+    if ! grep -q "# ai-local-dev aliases" "$ALIAS_FILE" 2>/dev/null; then
+        {
+            echo ""
+            echo "# ai-local-dev aliases"
+            echo "alias ai27b='ai-local 27b'"
+            echo "alias ai35b='ai-local 35b'"
+            echo "alias ai-status='ai-local status'"
+            echo "alias ai-stop='ai-local stop'"
+            echo "alias ai-goose='ai-local goose'"
+            echo "alias ai-goose-think='ai-local goose think'"
+        } >> "$ALIAS_FILE"
         log_info "Added aliases to $ALIAS_FILE"
     else
         log_info "Aliases already exist in $ALIAS_FILE"
@@ -129,7 +125,7 @@ else
 fi
 echo ""
 
-# 6. Verify installation
+# 5. Verify installation
 echo "🧪 Verifying installation..."
 if [ "$DRY_RUN" = false ]; then
     if command -v ai-local &> /dev/null; then
@@ -148,7 +144,7 @@ else
 fi
 echo ""
 
-# 7. Next steps
+# 6. Next steps
 echo "🎉 Installation complete!"
 echo ""
 echo "Next steps:"
@@ -157,7 +153,8 @@ echo "   2. Check status: ai-local status"
 echo "   3. Start a model: ai-local 27b"
 echo "   4. Launch Goose: ai-local goose"
 echo ""
-echo "📖 Documentation: $INSTALL_DIR/docs/"
+echo "💡 Tip: To update, just run 'git pull' in $REPO_DIR"
+echo "   No reinstallation needed — symlinks point to the repo directly."
 echo ""
 
 if [ "$DRY_RUN" = true ]; then
