@@ -344,11 +344,11 @@ launch_goose() {
         fi
         start_proxy_27b
         log_info "Launching Goose (nothink, via 27B proxy on :$LLAMA_PROXY_PORT)"
-        echo "  Provider: llama.cpp"
+        echo "  Provider: Ollama (27B proxy)"
         echo "  Model   : Qwen3.6-27B-UD-Q4_K_XL.gguf"
         echo "  Endpoint: http://localhost:$LLAMA_PROXY_PORT (proxy -> :$LLAMA_PORT)"
         echo ""
-        # For llama.cpp, use a compatible endpoint
+        # Use Ollama-compatible endpoint (no auth needed)
         export OLLAMA_HOST="http://localhost:$LLAMA_PROXY_PORT"
         goose session
     fi

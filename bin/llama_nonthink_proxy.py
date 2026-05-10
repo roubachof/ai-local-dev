@@ -66,6 +66,26 @@ FORCE_THINK = os.environ.get("LLAMA_PROXY_FORCE_THINK", "0") == "1"
 
 
 @app.middleware("http")
+async def auth_header_stripper(request: Request, call_next):
+    """Strip Authorization header before forwarding to upstream.
+    
+    Goose/OpenAI clients send Bearer tokens, but llama-server doesn't support auth
+    and rejects non-standard API keys. We strip the header before forwarding.
+    """
+    # Rebuild request without Authorization header
+    scope = request.scope.copy()
+    headers = []
+    for name, value in request.scope["headers"]:
+        if name.lower() != b"authorization":
+            headers.append((name, value))
+    scope["headers"] = headers
+    request._scope = scope
+    
+    response = await call_next(request)
+    return response
+
+
+@app.middleware("http")
 async def log_all_requests(request: Request, call_next):
     log.info(">> %s %s from %s", request.method, request.url.path,
              request.client.host if request.client else "?")

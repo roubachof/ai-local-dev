@@ -96,8 +96,6 @@ extensions:
     bundled: true
     available_tools: []
 OLLAMA_HOST: http://localhost:8081
-GOOSE_PROVIDER: openai
-GOOSE_MODEL: local-27b
-OPENAI_API_BASE: http://localhost:8081/v1
-OPENAI_API_KEY: sk-local-no-auth
+GOOSE_PROVIDER: ollama
+GOOSE_MODEL: qwen3.6:27b
 GOOSE_TELEMETRY_ENABLED: false
