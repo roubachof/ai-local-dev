@@ -427,12 +427,14 @@ case "$COMMAND" in
         start_llama_server
         start_proxy_27b
         update_qwen_settings "http://127.0.0.1:${LLAMA_PROXY_PORT}/v1" "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+        update_goose_settings "openai" "local-27b" "http://localhost:${LLAMA_PROXY_PORT}"
         log_success "Qwen3.6-27B ready. Launch with: ai-local goose or qwen"
         ;;
     35b)
         check_ollama
         start_proxy_35b
         update_qwen_settings "http://127.0.0.1:${OLLAMA_PROXY_PORT}/v1" "qwen3.6:35b-a3b"
+        update_goose_settings "ollama" "qwen3.6:35b-a3b" "http://localhost:${OLLAMA_PROXY_PORT}"
         log_success "Qwen3.6-35B-A3B ready. Launch with: ai-local goose or qwen"
         ;;
     status)
