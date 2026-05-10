@@ -165,37 +165,77 @@ stop_proxy() {
 }
 
 # ---- Status ----
+get_process_memory() {
+    local pid=$1
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        return
+    fi
+    # Get RSS memory in MB (works on macOS and Linux)
+    ps -p "$pid" -o rss= 2>/dev/null | awk '{print int($1/1024) "MB"}'
+}
+
 show_status() {
     echo "=== ai-local Status ==="
     echo ""
 
+    # llama-server (27B)
     if is_service_running "$LLAMA_PORT"; then
         log_success "llama.cpp (27B)  → port $LLAMA_PORT"
     else
-        log_warn "llama.cpp (27B)  → port $LLAMA_PORT (stopped)"
+        local llama_pid=$(pgrep -f "llama-server.*${LLAMA_PORT}" | head -1)
+        if [[ -n "$llama_pid" ]]; then
+            local mem=$(get_process_memory "$llama_pid")
+            log_warn "llama.cpp (27B)  → port $LLAMA_PORT (not responding, PID $llama_pid using $mem)"
+        else
+            log_warn "llama.cpp (27B)  → port $LLAMA_PORT (stopped)"
+        fi
     fi
 
+    # llama proxy (27B)
     if is_service_running "$LLAMA_PROXY_PORT"; then
         log_success "llama nothink proxy → port $LLAMA_PROXY_PORT"
     else
-        log_warn "llama nothink proxy → port $LLAMA_PROXY_PORT (stopped)"
+        local proxy_pid=$(pgrep -f "llama_nonthink_proxy.py.*${LLAMA_PROXY_PORT}" | head -1)
+        if [[ -n "$proxy_pid" ]]; then
+            local mem=$(get_process_memory "$proxy_pid")
+            log_warn "llama nothink proxy → port $LLAMA_PROXY_PORT (not responding, PID $proxy_pid using $mem)"
+        else
+            log_warn "llama nothink proxy → port $LLAMA_PROXY_PORT (stopped)"
+        fi
     fi
 
+    # Ollama (35B)
     if is_service_running "$OLLAMA_PORT"; then
         log_success "Ollama (35B) → port $OLLAMA_PORT"
     else
-        log_warn "Ollama (35B) → port $OLLAMA_PORT (stopped)"
+        local ollama_pid=$(pgrep -f "ollama serve" | head -1)
+        if [[ -n "$ollama_pid" ]]; then
+            local mem=$(get_process_memory "$ollama_pid")
+            log_warn "Ollama (35B) → port $OLLAMA_PORT (not responding, PID $ollama_pid using $mem)"
+        else
+            log_warn "Ollama (35B) → port $OLLAMA_PORT (stopped)"
+        fi
     fi
 
+    # Ollama proxy (35B)
     if is_service_running "$OLLAMA_PROXY_PORT"; then
         log_success "Ollama nothink proxy → port $OLLAMA_PROXY_PORT"
     else
-        log_warn "Ollama nothink proxy → port $OLLAMA_PROXY_PORT (stopped)"
+        local proxy_pid=$(pgrep -f "ollama_nothink_proxy.py.*${OLLAMA_PROXY_PORT}" | head -1)
+        if [[ -n "$proxy_pid" ]]; then
+            local mem=$(get_process_memory "$proxy_pid")
+            log_warn "Ollama nothink proxy → port $OLLAMA_PROXY_PORT (not responding, PID $proxy_pid using $mem)"
+        else
+            log_warn "Ollama nothink proxy → port $OLLAMA_PROXY_PORT (stopped)"
+        fi
     fi
 
     echo ""
     echo "Config: $CONF_FILE"
     [[ -f "$CONF_FILE" ]] && echo "  ✅ Loaded" || echo "  ⚠️  Using defaults"
+    echo ""
+    echo "💡 Tip: If a process shows memory but port doesn't respond, it may be stuck."
+    echo "   Try 'ai-local stop' to clean up all processes."
 }
 
 show_config() {
