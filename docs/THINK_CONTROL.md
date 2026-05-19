@@ -1,75 +1,54 @@
 # Think Control
 
 ## Overview
+`ai-local-dev` runs with thinking disabled by default for latency and cost savings. The proxy can be flipped to force-thinking mode with an environment variable.
 
-Both proxies in `ai-local-dev` disable model thinking by default, but you can **enable thinking at runtime** using environment variables.
+## Disable mechanism (current behavior)
+For `POST /v1/chat/completions`, the unified proxy applies:
 
-## How It Works
+- `chat_template_kwargs.enable_thinking=false` (Qwen template-level switch, used by llama.cpp and MLX)
+- `enable_thinking=false` (legacy fallback key)
+- `think=false` and `reasoning_effort=none` (defense-in-depth for Ollama)
 
-### Qwen3.6-35B-A3B (Ollama)
+The proxy also strips `<think>...</think>` blocks from response `content` in both JSON and SSE streaming responses when thinking is disabled.
 
-**Default behavior:** Injects `reasoning_effort:"none"` into requests → thinking OFF
-
-**Enable thinking:**
-```bash
-OLLAMA_PROXY_FORCE_THINK=1 ai-local 35b
-```
-
-### Qwen3.6-27B (llama-server)
-
-**Default behavior:** Sets `enable_thinking:false` and strips `reasoning_content` from responses → thinking OFF
-
-**Enable thinking:**
-```bash
-LLAMA_PROXY_FORCE_THINK=1 ai-local 27b
-```
-
-## When to Enable Thinking
-
-| Scenario | Recommendation |
-|----------|---------------|
-| Simple tasks (code formatting, Q&A) | ❌ Keep thinking OFF (faster, cheaper) |
-| Complex reasoning (math, logic puzzles) | ✅ Enable thinking |
-| Debugging difficult problems | ✅ Enable thinking |
-| Long conversations with deep analysis | ✅ Enable thinking |
-
-## Troubleshooting
-
-### Thinking not enabled even with FORCE_THINK=1
-
-1. **Restart the proxy:**
-```bash
-ai-local stop
-OLLAMA_PROXY_FORCE_THINK=1 ai-local 35b
-```
-
-2. **Check proxy logs:**
-   ```bash
-   tail -f /tmp/proxy-35b.log   # Ollama proxy
-   tail -f /tmp/proxy-27b.log   # llama-server proxy
-   ```
-
-3. **Verify environment variable is set:**
-   ```bash
-   echo $OLLAMA_PROXY_FORCE_THINK  # Should output "1"
-   echo $LLAMA_PROXY_FORCE_THINK   # Should output "1"
-   ```
-
-### Thinking enabled but not seeing reasoning output
-
-- For **llama-server (27B)**: The proxy strips `reasoning_content` from responses. When thinking is enabled, you'll see the full response including reasoning in the `content` field.
-- For **Ollama (35B)**: The proxy injects `reasoning_effort:"none"`. When thinking is enabled, it sends the request without modification, allowing the model to include reasoning tags.
-
-## Permanent Configuration
-
-To always enable thinking for a specific proxy, add to your `~/.zshrc`:
+## Enable thinking
+Canonical switch:
 
 ```bash
-# Always enable thinking for 27B model
-export LLAMA_PROXY_FORCE_THINK=1
-
-# Always enable thinking for 35B model
-export OLLAMA_PROXY_FORCE_THINK=1
+AI_LOCAL_FORCE_THINK=1 ai-local 27b
+AI_LOCAL_FORCE_THINK=1 ai-local 8b
+AI_LOCAL_FORCE_THINK=1 ai-local 35b
 ```
 
-Then restart your terminal or run: `source ~/.zshrc`
+Legacy aliases are still supported:
+
+- `LLAMA_PROXY_FORCE_THINK=1`
+- `OLLAMA_PROXY_FORCE_THINK=1`
+- `OLLAMA_PROXY_THINK=1`
+
+## Verify that thinking is really disabled
+Use the regression script:
+
+```bash
+bin/verify_nothink.sh
+```
+
+It compares nothink vs force-think on both proxies and fails if:
+
+- nothink completion tokens are not at least 5x smaller than force-think
+- nothink latency is not at least 2x faster than force-think
+
+## Logs
+All runtime logs are now under:
+
+- `~/.local/state/ai-local/logs/proxy-27b.log`
+- `~/.local/state/ai-local/logs/proxy-35b.log`
+
+You can tail them with:
+
+```bash
+ai-local logs 27b
+ai-local logs 8b
+ai-local logs 35b
+```

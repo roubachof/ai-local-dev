@@ -1,104 +1,85 @@
 # Architecture
 
 ## Overview
+`ai-local-dev` exposes stable OpenAI-compatible local endpoints while allowing backend switching (MLX or llama.cpp for 27B, Ollama for 8B/35B) and think-control through a unified proxy.
 
-`ai-local-dev` provides local AI model inference through a proxy-based architecture that allows switching between models and controlling thinking behavior.
+## High-level flow
+```mermaid
+flowchart LR
+    C[qwen-code / Goose / scripts]
+    P27[nothink_proxy.py :8081]
+    P35[nothink_proxy.py :11435]
+    R[model_router.py :8090]
+    MLX[mlx_lm.server :8082]
+    Llama[llama-server :8080]
+    Ollama[ollama serve :11434]
 
-## High-Level Architecture
-
-```
-┌─────────────┐    ┌─────────────────┐    ┌──────────────────┐
-│  qwen-code  │───▶│  nothink proxy  │───▶│  AI Model Server │
-│  (client)   │    │  (8081/11435)   │    │  (8080/11434)    │
-└─────────────┘    └─────────────────┘    └──────────────────┘
-                         │                         │
-                    Disables thinking        Serves model
+    C --> P27
+    C --> P35
+    C --> R
+    R --> P27
+    R --> P35
+    P27 --> MLX
+    P27 -. fallback .-> Llama
+    P35 --> Ollama
 ```
 
 ## Components
 
-### 1. Model Servers
+### `bin/ai-local`
+Primary orchestrator command. Key responsibilities:
 
-| Server | Port | Model | Framework |
-|--------|------|-------|-----------|
-| llama-server | 8080 | Qwen3.6-27B | llama.cpp |
-| ollama | 11434 | Qwen3.6-35B-A3B | Ollama |
+- starts/stops model backends and proxies
+- manages backend selection via `BACKEND_27B={mlx|llama}`
+- maintains PID files under `~/.local/state/ai-local/run/`
+- writes logs under `~/.local/state/ai-local/logs/`
+- updates `~/.qwen/settings.json` and `config/goose/config.yaml`
 
-### 2. Proxies
+### `bin/nothink_proxy.py`
+Unified proxy for 27B and shared Ollama stacks (8B/35B).
 
-#### `bin/ollama_nothink_proxy.py`
-- **Purpose:** Disable thinking for Ollama/Qwen3.6-35B
-- **Mechanism:** Injects `reasoning_effort:"none"` into request bodies
-- **Port:** 11435 → 11434
-- **Dependencies:** Python stdlib only (no external packages)
-- **Control:** `OLLAMA_PROXY_FORCE_THINK=1` to enable thinking
+- mode `llama`: used for 27B (MLX or llama.cpp upstream)
+- mode `ollama`: used for 8B/35B upstream
+- request mutation:
+  - `chat_template_kwargs.enable_thinking=false` (template-level switch)
+  - `enable_thinking=false` (legacy fallback)
+  - `think=false` and `reasoning_effort=none` (Ollama defense-in-depth)
+- response mutation in nothink mode:
+  - strips `<think>...</think>` from JSON and SSE chunks
+- exposes `/health` and `/v1/models` pass-throughs
 
-#### `bin/llama_nonthink_proxy.py`
-- **Purpose:** Strip reasoning content from llama-server/Qwen3.6-27B responses
-- **Mechanism:** Converts `reasoning_content` → `content` in responses
-- **Port:** 8081 → 8080
-- **Dependencies:** fastapi, httpx, uvicorn
-- **Control:** `LLAMA_PROXY_FORCE_THINK=1` to enable thinking
+### `bin/model_router.py`
+Optional helper endpoint that dispatches to 27B or shared Ollama proxy by requested `model` hint (`planner` vs `coder`).
 
-### 3. Orchestrator
+### Backends
+- 27B primary: `mlx_lm.server` on `MLX_PORT` (default `8082`)
+- 27B fallback: `llama-server` on `LLAMA_PORT` (default `8080`)
+- 8B: Ollama on `OLLAMA_PORT` (default `11434`) via `OLLAMA_PROXY_PORT` (default `11435`)
+- 35B: Ollama on `OLLAMA_PORT` (default `11434`) via `OLLAMA_PROXY_PORT` (default `11435`)
 
-#### `bin/ai-local`
-- Unified CLI to start/stop models, launch agents, and manage proxies
-- Sources configuration from `config/.qwen-local.conf`
-- Updates `~/.qwen/settings.json` for qwen-code
-- Commands: `ai-local {goose|qwen|27b|35b|status|stop|config|proxy}`
+## Think-control behavior
+- default: thinking disabled in proxy
+- force thinking: `AI_LOCAL_FORCE_THINK=1` before starting stack
+- backward-compatible aliases still supported:
+  - `LLAMA_PROXY_FORCE_THINK`
+  - `OLLAMA_PROXY_FORCE_THINK`
+  - `OLLAMA_PROXY_THINK`
 
-## Data Flow
+Verification script: `bin/verify_nothink.sh`
 
-### Request Flow (27B Model)
-```
-ai-local 27b → llama-server → llama_nonthink_proxy.py → qwen-code
-                    ↓
-            settings.json updated with:
-            - model: Qwen3.6-27B-UD-Q4_K_XL.gguf
-            - base_url: http://127.0.0.1:8081/v1
-```
+## Configuration model
+Defaults live in `config/.qwen-local.conf`, and local overrides are loaded from `config/.qwen-local.conf.local` when present.
 
-### Response Flow
-```
-llama-server → llama_nonthink_proxy.py → qwen-code
-     ↓                    ↓
-reasoning_content   reasoning_content stripped
-in response         → content field
-```
+Important keys:
 
-## Configuration
+- `BACKEND_27B`
+- `QWEN_27B_MLX_MODEL`
+- `QWEN_27B_MODEL`
+- `QWEN_8B_OLLAMA_MODEL`
+- `AI_LOCAL_FORCE_THINK`
+- `AI_LOCAL_STATE_DIR`, `AI_LOCAL_LOG_DIR`, `AI_LOCAL_RUN_DIR`
 
-All settings centralized in `config/.qwen-local.conf`:
-
-```bash
-# Ports
-LLAMA_PORT=8080
-LLAMA_PROXY_PORT=8081
-OLLAMA_PORT=11434
-OLLAMA_PROXY_PORT=11435
-
-# Model paths
-QWEN_27B_MODEL="$HOME/.local/share/llama-models/Qwen3.6-27B-UD-Q4_K_XL.gguf"
-
-# Performance
-LLAMA_CTX_SIZE=131072
-LLAMA_TEMP=0.6
-LLAMA_TOP_P=0.95
-LLAMA_TOP_K=20
-LLAMA_GPU_LAYERS=99
-```
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| OLLAMA_PROXY_FORCE_THINK | 0 | Enable thinking in Ollama proxy |
-| LLAMA_PROXY_FORCE_THINK | 0 | Enable thinking in llama-server proxy |
-
-## Security Considerations
-
-- All services bind to `127.0.0.1` only (no external access)
-- No authentication required for local proxies
-- Model files stored in user's home directory
-- Config file can be overridden per-user with `.qwen-local.conf.local`
+## Security and locality
+- all services bind to `127.0.0.1`
+- no external auth expected for localhost usage
+- credentials from client `Authorization` headers are stripped before upstream forwarding

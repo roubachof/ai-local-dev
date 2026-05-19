@@ -95,7 +95,8 @@ extensions:
     display_name: Developer
     bundled: true
     available_tools: []
-OLLAMA_HOST: http://localhost:8081
+OLLAMA_HOST: http://localhost:11434
 GOOSE_PROVIDER: ollama
-GOOSE_MODEL: qwen3.6:27b
+GOOSE_MODEL: qwen3:8b
+OPENAI_API_BASE: http://localhost:11434/v1
 GOOSE_TELEMETRY_ENABLED: false

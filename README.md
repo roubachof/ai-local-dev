@@ -2,7 +2,7 @@
 
 **Local AI Development Infrastructure**
 
-Run Qwen models locally with proxies that disable thinking, switch between models easily, and deploy to any machine with one command.
+Run Qwen models locally with a unified nothink proxy, an MLX-first 27B path, and Ollama stacks for fast 8B or stronger 35B via one orchestrator command: `ai-local`.
 
 ---
 
@@ -14,51 +14,62 @@ git clone https://github.com/roubachof/ai-local-dev.git
 cd ai-local-dev
 ./install.sh
 
-# Switch to 27B model
+# Download models
+ai-local download 27b
+ai-local download 8b
+ai-local download 35b
+
+# Start stacks
 ai-local 27b
+ai-local 8b
+ai-local 35b
 
-# Launch Goose (nothink by default)
+# Launch client
 ai-local goose
-
-# Launch Goose with thinking ON
-ai-local goose think
 ```
 
 ---
 
 ## Architecture
 
-- **`bin/ai-local`** — Unified orchestrator for models, proxies, and agents
-- **`bin/ollama_nothink_proxy.py`** — Disables thinking for Ollama/35B via `reasoning_effort:none`
-- **`bin/llama_nonthink_proxy.py`** — Strips reasoning content for llama-server/27B
-- **`config/.qwen-local.conf`** — Centralized configuration (ports, paths, timeouts)
-- **`lib/qwen-config.sh`** — Shared library for shell scripts
-- **`docs/`** — Comprehensive documentation
+- **`bin/ai-local`** — Unified orchestrator for models, proxies, and clients
+- **`bin/nothink_proxy.py`** — Unified proxy for 27B + shared Ollama path (8B/35B)
+- **`bin/model_router.py`** — Optional planner/coder router endpoint
+- **`config/.qwen-local.conf`** — Centralized configuration
+- **`lib/qwen-config.sh`** — Shared shell helpers and config loading
+- **`docs/`** — Architecture, setup, troubleshooting, think control, MLX migration
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| **Model Switching** | Toggle between Qwen3.6-27B (dense) and Qwen3.6-35B-A3B (MoE) |
-| **Thinking Control** | Enable/disable model thinking at runtime via env vars |
-| **Health Checks** | Automatic service status monitoring |
-| **Easy Install** | One-command setup on new machines |
-| **Config Centralization** | All settings in one file |
-| **Unified CLI** | Single entry point: `ai-local`
+- 27B backend switch: `BACKEND_27B={mlx|llama}`
+- Stable public 27B endpoint (`http://127.0.0.1:8081/v1`) regardless of backend
+- Thinking disabled by default with force-think override (`AI_LOCAL_FORCE_THINK=1`)
+- Persistent logs and PID files under `~/.local/state/ai-local/`
+- Commands for restart, logs, download, and doctor checks
 
 ## Models
 
-| Model | Type | Service | Proxy | Port |
-|-------|------|---------|-------|------|
-| Qwen3.6-27B | Dense (llama.cpp) | llama-server | llama_nonthink_proxy.py | 8080 → 8081 |
-| Qwen3.6-35B-A3B | MoE (Ollama) | ollama | ollama_nothink_proxy.py | 11434 → 11435 |
+- **Qwen3.6-27B**: `mlx_lm.server` (default, port `8082`) or `llama-server` fallback (`8080`) behind proxy `8081`
+- **Qwen3-8B**: Ollama (`11434`) behind shared Ollama proxy (`11435`)
+- **Qwen3.6-35B-A3B**: Ollama (`11434`) behind proxy `11435`
+
+## Useful commands
+
+```bash
+ai-local status
+ai-local restart 27b
+ai-local logs 27b
+ai-local doctor
+bin/verify_nothink.sh
+```
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — How the proxies work
-- [`docs/SETUP_FIRST_TIME.md`](docs/SETUP_FIRST_TIME.md) — Fresh machine setup
-- [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) — Common issues and fixes
-- [`docs/THINK_CONTROL.md`](docs/THINK_CONTROL.md) — Force thinking on demand
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/SETUP_FIRST_TIME.md`](docs/SETUP_FIRST_TIME.md)
+- [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
+- [`docs/THINK_CONTROL.md`](docs/THINK_CONTROL.md)
+- [`docs/MLX_MIGRATION.md`](docs/MLX_MIGRATION.md)
 
 ## License
 

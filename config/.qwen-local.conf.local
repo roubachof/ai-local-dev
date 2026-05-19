@@ -1,0 +1,5 @@
+# Local machine overrides for ai-local-dev
+# This file is sourced after config/.qwen-local.conf.
+# Keep llama.cpp as the default backend for 27B.
+BACKEND_27B=llama
+QWEN_SESSION_TOKEN_LIMIT=128000

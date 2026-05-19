@@ -75,9 +75,18 @@ echo ""
 MISSING=0
 check_prerequisite "python3" "Python 3" || MISSING=$((MISSING+1))
 check_prerequisite "ollama" "Ollama" || MISSING=$((MISSING+1))
-check_prerequisite "llama-server" "llama-server (llama.cpp)" || MISSING=$((MISSING+1))
 check_prerequisite "curl" "curl" || MISSING=$((MISSING+1))
 check_prerequisite "node" "Node.js" || MISSING=$((MISSING+1))
+if check_prerequisite "llama-server" "llama-server (llama.cpp fallback)"; then
+    :
+else
+    log_warn "llama-server missing (optional unless BACKEND_27B=llama)"
+fi
+if python3 -c "import mlx_lm" >/dev/null 2>&1; then
+    log_info "mlx_lm Python module is installed"
+else
+    log_warn "mlx_lm Python module is missing (required for BACKEND_27B=mlx)"
+fi
 
 echo ""
 if [ $MISSING -gt 0 ]; then
@@ -97,7 +106,7 @@ if [ "$DRY_RUN" = false ]; then
         log_info "Created venv: $VENV_DIR"
     fi
     "$VENV_DIR/bin/pip" install -q -r "$REPO_DIR/requirements.txt"
-    log_info "Installed Python dependencies (fastapi, httpx, uvicorn)"
+    log_info "Installed Python dependencies (fastapi, httpx, uvicorn, mlx-lm)"
 else
     echo "   [DRY RUN] Would set up venv and install dependencies"
 fi
@@ -116,6 +125,9 @@ echo "🔗 Creating symlinks..."
 symlink_file "$REPO_DIR/bin/ai-local"                   "ai-local"
 symlink_file "$REPO_DIR/bin/ollama_nothink_proxy.py"     "ollama_nothink_proxy.py"
 symlink_file "$REPO_DIR/bin/llama_nonthink_proxy.py"     "llama_nonthink_proxy.py"
+symlink_file "$REPO_DIR/bin/nothink_proxy.py"            "nothink_proxy.py"
+symlink_file "$REPO_DIR/bin/model_router.py"             "model_router.py"
+symlink_file "$REPO_DIR/bin/verify_nothink.sh"           "verify_nothink.sh"
 echo ""
 
 # 4b. Setup Goose config symlink
@@ -145,6 +157,7 @@ if [ "$DRY_RUN" = false ]; then
             echo ""
             echo "# ai-local-dev aliases"
             echo "alias ai27b='ai-local 27b'"
+            echo "alias ai8b='ai-local 8b'"
             echo "alias ai35b='ai-local 35b'"
             echo "alias ai-status='ai-local status'"
             echo "alias ai-stop='ai-local stop'"
@@ -153,7 +166,12 @@ if [ "$DRY_RUN" = false ]; then
         } >> "$ALIAS_FILE"
         log_info "Added aliases to $ALIAS_FILE"
     else
-        log_info "Aliases already exist in $ALIAS_FILE"
+        if ! grep -q "alias ai8b='ai-local 8b'" "$ALIAS_FILE" 2>/dev/null; then
+            echo "alias ai8b='ai-local 8b'" >> "$ALIAS_FILE"
+            log_info "Added missing ai8b alias to $ALIAS_FILE"
+        else
+            log_info "Aliases already exist in $ALIAS_FILE"
+        fi
     fi
 else
     echo "   [DRY RUN] Would add aliases to $ALIAS_FILE"
@@ -185,7 +203,7 @@ echo ""
 echo "Next steps:"
 echo "   1. Source your shell config: source $ALIAS_FILE"
 echo "   2. Check status: ai-local status"
-echo "   3. Start a model: ai-local 27b"
+echo "   3. Start a model: ai-local 27b (or ai-local 8b)"
 echo "   4. Launch Goose: ai-local goose"
 echo ""
 echo "💡 Tip: To update, just run 'git pull' in $REPO_DIR"

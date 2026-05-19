@@ -4,6 +4,49 @@ All notable changes to ai-local-dev will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [Unreleased]
+
+### Added
+- Qwen3 8B stack support through `ai-local 8b` (shared Ollama proxy path).
+- New `QWEN_8B_OLLAMA_MODEL` config key in `config/.qwen-local.conf` and `lib/qwen-config.sh`.
+- CLI coverage for `8b` in `download`, `restart`, `stop`, `logs`, and help output.
+- Router aliases for `qwen3:8b` and `local-8b` in `bin/model_router.py`.
+
+### Changed
+- Docs and setup instructions updated for 8B workflows.
+## [1.1.0] — 2026-05-15
+
+### Added
+- Unified proxy implementation in `bin/nothink_proxy.py` with:
+  - mode support for 27B (`llama` mode) and 35B (`ollama` mode)
+  - shared think-disable field injection
+  - `<think>...</think>` stripping in JSON and SSE responses
+  - structured JSON proxy logs with token/latency fields
+- New shared helper module `bin/_nothink.py` for disable logic and streaming-safe think stripping.
+- Verification harness `bin/verify_nothink.sh` to compare no-think vs force-think token and latency ratios.
+- 27B backend migration support for MLX:
+  - `start_mlx_server` flow in `ai-local`
+  - `BACKEND_27B={mlx|llama}` config switch
+  - `27b-mlx` and `27b-llama` commands
+- New operational commands:
+  - `ai-local restart [27b|35b]`
+  - `ai-local logs <service>`
+  - `ai-local download <target>`
+  - `ai-local doctor`
+  - `ai-local router {start|stop|status}`
+- Model router helper `bin/model_router.py`.
+- Test suite under `tests/` for request/response mutation logic.
+- GitHub Actions workflow `.github/workflows/ci.yml` running `ruff` and `pytest`.
+- `docs/MLX_MIGRATION.md` rollback/rollout guide.
+
+### Changed
+- `bin/ai-local` rewritten in bash-compatible form and now uses `lib/qwen-config.sh`.
+- Config loading now supports `config/.qwen-local.conf.local` overrides.
+- Runtime logs moved from `/tmp` to `~/.local/state/ai-local/logs`.
+- Runtime PID files moved to `~/.local/state/ai-local/run`.
+- Installer now treats `llama-server` as optional fallback and checks for `mlx_lm`.
+- `requirements.txt` now includes upper version bounds and `mlx-lm`.
+- Documentation updated for new architecture, commands, and troubleshooting flow.
 
 ## [1.0.0] — 2026-05-10
 
