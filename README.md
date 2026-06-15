@@ -2,7 +2,7 @@
 
 **Local AI Development Infrastructure**
 
-Run Qwen models locally with a unified nothink proxy, an MLX-first 27B path, and Ollama stacks for fast 8B or stronger 35B via one orchestrator command: `ai-local`.
+Run Qwen models locally with a unified nothink proxy, llama.cpp for 27B, and Ollama stacks for 8B/35B via one orchestrator command: `ai-local`.
 
 ---
 
@@ -23,9 +23,6 @@ ai-local download 35b
 ai-local 27b
 ai-local 8b
 ai-local 35b
-
-# Launch client
-ai-local goose
 ```
 
 ---
@@ -37,21 +34,21 @@ ai-local goose
 - **`bin/model_router.py`** — Optional planner/coder router endpoint
 - **`config/.qwen-local.conf`** — Centralized configuration
 - **`lib/qwen-config.sh`** — Shared shell helpers and config loading
-- **`docs/`** — Architecture, setup, troubleshooting, think control, MLX migration
+- **`docs/`** — Architecture, setup, troubleshooting, think control
 
 ## Features
 
-- 27B backend switch: `BACKEND_27B={mlx|llama}`
-- Stable public 27B endpoint (`http://127.0.0.1:8081/v1`) regardless of backend
+- 27B llama.cpp backend with 64K context + Q8_0 KV cache quantization
+- Stable 27B endpoint (`http://127.0.0.1:8081/v1`)
 - Thinking disabled by default with force-think override (`AI_LOCAL_FORCE_THINK=1`)
 - Persistent logs and PID files under `~/.local/state/ai-local/`
 - Commands for restart, logs, download, and doctor checks
 
 ## Models
 
-- **Qwen3.6-27B**: `mlx_lm.server` (default, port `8082`) or `llama-server` fallback (`8080`) behind proxy `8081`
-- **Qwen3-8B**: Ollama (`11434`) behind shared Ollama proxy (`11435`)
-- **Qwen3.6-35B-A3B**: Ollama (`11434`) behind proxy `11435`
+- **Qwen3.6-27B**: `llama-server` (port `8080`) behind proxy (`8081`) with 64K context
+- **Qwen3-8B**: Ollama direct (`11434`)
+- **Qwen3.6-35B-A3B**: Ollama (`11434`) behind proxy (`11435`)
 
 ## Useful commands
 
@@ -60,7 +57,7 @@ ai-local status
 ai-local restart 27b
 ai-local logs 27b
 ai-local doctor
-bin/verify_nothink.sh
+ai-local config
 ```
 
 ## Documentation
@@ -69,7 +66,7 @@ bin/verify_nothink.sh
 - [`docs/SETUP_FIRST_TIME.md`](docs/SETUP_FIRST_TIME.md)
 - [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 - [`docs/THINK_CONTROL.md`](docs/THINK_CONTROL.md)
-- [`docs/MLX_MIGRATION.md`](docs/MLX_MIGRATION.md)
+- [`docs/NGROK_ENDPOINTS.md`](docs/NGROK_ENDPOINTS.md)
 
 ## License
 

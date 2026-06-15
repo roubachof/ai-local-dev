@@ -120,33 +120,12 @@ start_llama_server() {
         --top-k "$LLAMA_TOP_K" \
         --n-gpu-layers "$LLAMA_GPU_LAYERS" \
         --reasoning-format "$LLAMA_REASONING_FORMAT" \
+        --cache-type-k "$LLAMA_CACHE_TYPE_K" \
+        --cache-type-v "$LLAMA_CACHE_TYPE_V" \
         > "$AI_LOCAL_LOG_DIR/llama-server.log" 2>&1 &
     save_pid "llama" "$!"
     wait_for_service "$LLAMA_PORT" "/health" "$SERVICE_STARTUP_WAIT" \
         || log_error "llama-server failed to become healthy"
-}
-
-start_mlx_server() {
-    ensure_state_dirs
-    if is_service_running "$MLX_PORT" "/v1/models"; then
-        log_success "mlx_lm.server already running on port $MLX_PORT"
-        return 0
-    fi
-    local py
-    py="$(find_python)"
-    "$py" -c "import mlx_lm" >/dev/null 2>&1 \
-        || log_error "mlx_lm not available. Install dependencies: $py -m pip install -r requirements.txt"
-    log_info "Starting mlx_lm.server on port $MLX_PORT"
-    nohup "$py" -m mlx_lm.server \
-        --model "$QWEN_27B_MLX_MODEL" \
-        --host 127.0.0.1 \
-        --port "$MLX_PORT" \
-        --temp "$MLX_TEMP" \
-        --top-p "$MLX_TOP_P" \
-        > "$AI_LOCAL_LOG_DIR/mlx-server.log" 2>&1 &
-    save_pid "mlx" "$!"
-    wait_for_service "$MLX_PORT" "/v1/models" "$SERVICE_STARTUP_WAIT" \
-        || log_error "mlx_lm.server failed to become healthy"
 }
 
 start_ollama() {
@@ -157,7 +136,11 @@ start_ollama() {
     fi
     command -v ollama >/dev/null 2>&1 || log_error "Ollama not installed: https://ollama.com"
     log_info "Starting Ollama on port $OLLAMA_PORT"
-    nohup ollama serve > "$AI_LOCAL_LOG_DIR/ollama.log" 2>&1 &
+    nohup env \
+        OLLAMA_FLASH_ATTENTION="$OLLAMA_FLASH_ATTENTION" \
+        OLLAMA_KV_CACHE_TYPE="$OLLAMA_KV_CACHE_TYPE" \
+        OLLAMA_KEEP_ALIVE="$OLLAMA_KEEP_ALIVE" \
+        ollama serve > "$AI_LOCAL_LOG_DIR/ollama.log" 2>&1 &
     save_pid "ollama" "$!"
     wait_for_service "$OLLAMA_PORT" "/api/tags" "$SERVICE_STARTUP_WAIT" \
         || log_error "Ollama failed to become healthy"
@@ -189,6 +172,7 @@ start_proxy() {
         AI_LOCAL_NOTHINK_TOP_P="$AI_LOCAL_NOTHINK_TOP_P" \
         AI_LOCAL_THINK_TEMP="$AI_LOCAL_THINK_TEMP" \
         AI_LOCAL_THINK_TOP_P="$AI_LOCAL_THINK_TOP_P" \
+        AI_LOCAL_WARP_CTX_SOFT_LIMIT="$AI_LOCAL_WARP_CTX_SOFT_LIMIT" \
         "$py" "$AI_LOCAL_DEV_DIR/bin/nothink_proxy.py" \
         --mode "$mode" \
         --port "$listen_port" \
@@ -200,13 +184,7 @@ start_proxy() {
 }
 
 start_proxy_27b() {
-    local backend=$1
-    local upstream
-    case "$backend" in
-        mlx)   upstream="http://127.0.0.1:${MLX_PORT}" ;;
-        llama) upstream="http://127.0.0.1:${LLAMA_PORT}" ;;
-        *)     log_error "Unsupported 27B backend: $backend" ;;
-    esac
+    local upstream="http://127.0.0.1:${LLAMA_PORT}"
     start_proxy "proxy-27b" "llama" "$LLAMA_PROXY_PORT" "$upstream" "proxy-27b.log"
 }
 
@@ -236,7 +214,6 @@ start_router() {
 stop_27b() {
     stop_service "proxy-27b" "27B proxy" "nothink_proxy.py.*--port[ =]${LLAMA_PROXY_PORT}" 1
     stop_service "llama" "llama-server" "llama-server.*--port[ =]${LLAMA_PORT}" 1
-    stop_service "mlx" "mlx_lm.server" "mlx_lm.server.*--port[ =]${MLX_PORT}" 1
 }
 
 stop_35b() {
@@ -302,123 +279,65 @@ status_line() {
 show_status() {
     echo "=== ai-local Status ==="
     echo ""
-    echo "27B backend selected: ${BACKEND_27B}"
-    status_line "llama-server (27B fallback)" "$LLAMA_PORT" "/health" "llama" "llama-server.*--port[ =]${LLAMA_PORT}"
-    status_line "mlx_lm.server (27B primary)" "$MLX_PORT" "/v1/models" "mlx" "mlx_lm.server.*--port[ =]${MLX_PORT}"
+    status_line "llama-server (27B)" "$LLAMA_PORT" "/health" "llama" "llama-server.*--port[ =]${LLAMA_PORT}"
     status_line "27B proxy" "$LLAMA_PROXY_PORT" "/health" "proxy-27b" "nothink_proxy.py.*--port[ =]${LLAMA_PROXY_PORT}"
     status_line "Ollama (8B/35B)" "$OLLAMA_PORT" "/api/tags" "ollama" "ollama serve"
-    status_line "Ollama proxy (35B / optional 8B no-think)" "$OLLAMA_PROXY_PORT" "/health" "proxy-35b" "nothink_proxy.py.*--port[ =]${OLLAMA_PROXY_PORT}"
+    status_line "Ollama proxy (35B/8B no-think)" "$OLLAMA_PROXY_PORT" "/health" "proxy-35b" "nothink_proxy.py.*--port[ =]${OLLAMA_PROXY_PORT}"
     status_line "model-router" "$ROUTER_PORT" "/health" "router" "model_router.py.*--port[ =]${ROUTER_PORT}"
     echo ""
     echo "Logs: $AI_LOCAL_LOG_DIR"
     echo "Run files: $AI_LOCAL_RUN_DIR"
 }
 
-update_goose_settings() {
-    local provider=$1
-    local model=$2
-    local host=$3
-    local openai_base_url=$4
-    local goose_config="$AI_LOCAL_DEV_DIR/config/goose/config.yaml"
-    [[ -f "$goose_config" ]] || log_error "Goose config template not found: $goose_config"
-    sed -i '' \
-        -e "s|^OLLAMA_HOST:.*|OLLAMA_HOST: $host|" \
-        -e "s|^GOOSE_PROVIDER:.*|GOOSE_PROVIDER: $provider|" \
-        -e "s|^GOOSE_MODEL:.*|GOOSE_MODEL: $model|" \
-        -e "s|^OPENAI_API_BASE:.*|OPENAI_API_BASE: $openai_base_url|" \
-        "$goose_config"
+enforce_single_model_mode() {
+    local target=$1
+    if [[ "$AI_LOCAL_SINGLE_MODEL_MODE" != "1" ]]; then
+        return 0
+    fi
+    case "$target" in
+        27b)
+            if is_service_running "$OLLAMA_PORT" "/api/tags" || is_service_running "$OLLAMA_PROXY_PORT" "/health"; then
+                log_info "Single-model mode: stopping Ollama/35B stack before starting 27B"
+                stop_35b
+            fi
+            ;;
+        ollama)
+            if is_service_running "$LLAMA_PROXY_PORT" "/health" || is_service_running "$LLAMA_PORT" "/health"; then
+                log_info "Single-model mode: stopping 27B stack before starting Ollama model"
+                stop_27b
+            fi
+            ;;
+    esac
 }
 
 start_27b_with_backend() {
-    local backend=$1
-    local qwen_model_id=""
-    case "$backend" in
-        llama)
-            start_llama_server
-            qwen_model_id="$(basename "$QWEN_27B_MODEL")"
-            ;;
-        mlx)
-            start_mlx_server
-            qwen_model_id="$QWEN_27B_MLX_MODEL"
-            ;;
-        *)     log_error "Invalid backend '$backend' (expected mlx or llama)" ;;
-    esac
-    start_proxy_27b "$backend"
+    enforce_single_model_mode "27b"
+    start_llama_server
+    local qwen_model_id
+    qwen_model_id="$(basename "$QWEN_27B_MODEL")"
+    start_proxy_27b "llama"
     update_qwen_settings "http://127.0.0.1:${LLAMA_PROXY_PORT}/v1" "$qwen_model_id"
-    update_goose_settings "openai" "local-27b" "http://localhost:${LLAMA_PROXY_PORT}" "http://localhost:${LLAMA_PROXY_PORT}/v1"
-    log_success "Qwen3.6-27B (${backend}) ready on http://127.0.0.1:${LLAMA_PROXY_PORT}/v1"
+    log_success "Qwen3.6-27B ready on http://127.0.0.1:${LLAMA_PROXY_PORT}/v1"
 }
-
 start_35b_stack() {
+    enforce_single_model_mode "ollama"
     start_ollama
     start_proxy_35b
     update_qwen_settings "http://127.0.0.1:${OLLAMA_PROXY_PORT}/v1" "$QWEN_35B_OLLAMA_MODEL"
-    update_goose_settings "ollama" "$QWEN_35B_OLLAMA_MODEL" "http://localhost:${OLLAMA_PROXY_PORT}" "http://localhost:${OLLAMA_PROXY_PORT}/v1"
-    log_success "Qwen3.6-35B-A3B ready on http://127.0.0.1:${OLLAMA_PROXY_PORT}/v1"
+    log_success "$QWEN_35B_OLLAMA_MODEL ready on http://127.0.0.1:${OLLAMA_PROXY_PORT}/v1"
 }
 start_8b_stack() {
+    enforce_single_model_mode "ollama"
     start_ollama
     update_qwen_settings "http://127.0.0.1:${OLLAMA_PORT}/v1" "$QWEN_8B_OLLAMA_MODEL"
-    update_goose_settings "ollama" "$QWEN_8B_OLLAMA_MODEL" "http://localhost:${OLLAMA_PORT}" "http://localhost:${OLLAMA_PORT}/v1"
-    log_success "Qwen3-8B ready on http://127.0.0.1:${OLLAMA_PORT}/v1 (thinking enabled by default)"
+    log_success "$QWEN_8B_OLLAMA_MODEL ready on http://127.0.0.1:${OLLAMA_PORT}/v1"
 }
-
-check_goose() {
-    command -v goose >/dev/null 2>&1 || log_error "Goose not installed: brew install block-goose-cli"
-}
-
-launch_goose() {
-    check_goose
-    local settings_file="$HOME/.qwen/settings.json"
-    [[ -f "$settings_file" ]] || log_error "No model configured. Run 'ai-local 27b', 'ai-local 8b', or 'ai-local 35b' first."
-    local model
-    model="$(python3 -c "import json;print(json.load(open('$settings_file'))['model']['name'])" 2>/dev/null || true)"
-    if [[ "$model" == *"35b"* ]]; then
-        start_ollama
-        start_proxy_35b
-        log_info "Launching Goose via Ollama proxy (no-think)"
-        OLLAMA_HOST="http://localhost:${OLLAMA_PROXY_PORT}" goose session
-        return 0
-    fi
-    if [[ "$model" == *"8b"* ]]; then
-        start_ollama
-        log_info "Launching Goose via direct Ollama (8B think by default)"
-        OLLAMA_HOST="http://localhost:${OLLAMA_PORT}" goose session
-        return 0
-    fi
-
-    start_proxy_27b "$BACKEND_27B"
-    log_info "Launching Goose via 27B proxy (${BACKEND_27B})"
-    OLLAMA_HOST="http://localhost:${LLAMA_PROXY_PORT}" goose session
-}
-
-launch_goose_think() {
-    check_goose
-    start_ollama
-    log_info "Launching Goose with thinking ON (direct to Ollama ${OLLAMA_PORT})"
-    OLLAMA_HOST="http://localhost:${OLLAMA_PORT}" goose session
-}
-
-launch_qwen() {
-    local settings_file="$HOME/.qwen/settings.json"
-    [[ -f "$settings_file" ]] || log_error "qwen-code not configured. Run 'ai-local 27b', 'ai-local 8b', or 'ai-local 35b' first."
-    exec qwen "$@"
-}
-
-launch_qwen_think() {
-    start_ollama
-    update_qwen_settings "http://127.0.0.1:${OLLAMA_PORT}/v1" "$QWEN_35B_OLLAMA_MODEL"
-    log_info "Launching qwen-code in thinking mode (direct Ollama)"
-    exec qwen "$@"
-}
-
 show_logs() {
     local service=$1
     local file=""
     case "$service" in
         27b|27b-proxy|proxy-27b) file="$AI_LOCAL_LOG_DIR/proxy-27b.log" ;;
         llama|27b-llama) file="$AI_LOCAL_LOG_DIR/llama-server.log" ;;
-        mlx|27b-mlx) file="$AI_LOCAL_LOG_DIR/mlx-server.log" ;;
         8b) file="$AI_LOCAL_LOG_DIR/ollama.log" ;;
         8b-proxy) file="$AI_LOCAL_LOG_DIR/proxy-35b.log" ;;
         35b|35b-proxy|proxy-35b) file="$AI_LOCAL_LOG_DIR/proxy-35b.log" ;;
@@ -434,22 +353,11 @@ download_model() {
     local target=$1
     case "$target" in
         27b)
-            if [[ "$BACKEND_27B" == "mlx" ]]; then
-                download_model "27b-mlx"
-            else
-                download_model "27b-llama"
-            fi
-            ;;
-        27b-llama)
-            command -v huggingface-cli >/dev/null 2>&1 || log_error "huggingface-cli is required for 27b-llama download"
+            command -v huggingface-cli >/dev/null 2>&1 || log_error "huggingface-cli is required for 27b download"
             mkdir -p "$(dirname "$QWEN_27B_MODEL")"
             huggingface-cli download unsloth/Qwen3.6-27B-GGUF \
                 Qwen3.6-27B-UD-Q4_K_XL.gguf \
                 --local-dir "$(dirname "$QWEN_27B_MODEL")"
-            ;;
-        27b-mlx)
-            command -v huggingface-cli >/dev/null 2>&1 || log_error "huggingface-cli is required for MLX model pre-download"
-            huggingface-cli download "$QWEN_27B_MLX_MODEL"
             ;;
         35b)
             command -v ollama >/dev/null 2>&1 || log_error "Ollama not installed"
@@ -460,7 +368,7 @@ download_model() {
             ollama pull "$QWEN_8B_OLLAMA_MODEL"
             ;;
         *)
-            log_error "Unknown download target: $target (expected 27b, 27b-llama, 27b-mlx, 8b, 35b)"
+            log_error "Unknown download target: $target (expected 27b, 8b, 35b)"
             ;;
     esac
 }
@@ -497,13 +405,7 @@ doctor() {
         failed=1
     fi
 
-    if "$py" -c "import mlx_lm" >/dev/null 2>&1; then
-        log_success "mlx_lm import OK"
-    else
-        log_warn "mlx_lm import failed (required for BACKEND_27B=mlx)"
-    fi
-
-    if [[ "$BACKEND_27B" == "llama" && ! -f "$QWEN_27B_MODEL" ]]; then
+    if [[ ! -f "$QWEN_27B_MODEL" ]]; then
         log_warn "27B GGUF missing: $QWEN_27B_MODEL"
         failed=1
     fi
@@ -530,41 +432,26 @@ doctor() {
 restart_stack() {
     local target=$1
     case "$target" in
-        27b)
-            stop_27b
-            start_27b_with_backend "$BACKEND_27B"
-            ;;
-        35b)
-            stop_35b
-            start_35b_stack
-            ;;
-        8b)
-            stop_35b
-            start_8b_stack
-            ;;
-        *)
-            log_error "Usage: ai-local restart [27b|8b|35b]"
-            ;;
+        27b)  stop_27b; start_27b_with_backend ;;
+        35b)  stop_35b; start_35b_stack ;;
+        8b)   stop_35b; start_8b_stack ;;
+        *)    log_error "Usage: ai-local restart [27b|8b|35b]" ;;
     esac
 }
 
 usage() {
     cat << EOF
-ai-local — Unified Local AI Orchestrator
+ai-local — Local AI Orchestrator
 
 Usage:
-  ai-local goose [think]         Launch Goose (default via active model endpoint)
-  ai-local qwen [think]          Launch qwen-code (or thinking direct mode)
-  ai-local 27b                   Start 27B stack using BACKEND_27B
-  ai-local 27b-mlx               Start 27B stack with MLX backend
-  ai-local 27b-llama             Start 27B stack with llama.cpp backend
-  ai-local 8b                    Start 8B stack (direct Ollama, think by default)
+  ai-local 27b                   Start 27B llama.cpp stack
+  ai-local 8b                    Start 8B stack (direct Ollama)
   ai-local 35b                   Start 35B stack (Ollama + proxy)
   ai-local restart [27b|8b|35b]  Restart selected stack
   ai-local stop [27b|8b|35b|all] Stop selected stack (or all by default)
   ai-local status                Show service status
-  ai-local logs <service>        Tail logs (27b, llama, mlx, 8b, 35b, ollama, router)
-  ai-local download <target>     Download model (27b, 27b-llama, 27b-mlx, 8b, 35b)
+  ai-local logs <service>        Tail logs (27b, llama, 8b, 35b, ollama, router)
+  ai-local download <target>     Download model (27b, 8b, 35b)
   ai-local doctor                Run diagnostics
   ai-local config                Show resolved configuration
   ai-local proxy {start|stop|status}
@@ -581,28 +468,8 @@ COMMAND="${1:-}"
 SUBCOMMAND="${2:-}"
 
 case "$COMMAND" in
-    goose)
-        case "$SUBCOMMAND" in
-            think) launch_goose_think ;;
-            "") launch_goose ;;
-            *) usage ;;
-        esac
-        ;;
-    qwen)
-        case "$SUBCOMMAND" in
-            think) shift 2 || true; launch_qwen_think "$@" ;;
-            "") shift 1 || true; launch_qwen "$@" ;;
-            *) shift 1 || true; launch_qwen "$@" ;;
-        esac
-        ;;
     27b)
-        start_27b_with_backend "$BACKEND_27B"
-        ;;
-    27b-mlx)
-        start_27b_with_backend "mlx"
-        ;;
-    27b-llama)
-        start_27b_with_backend "llama"
+        start_27b_with_backend
         ;;
     8b)
         start_8b_stack
@@ -642,22 +509,18 @@ case "$COMMAND" in
     proxy)
         case "$SUBCOMMAND" in
             start)
-                if [[ "$BACKEND_27B" == "mlx" ]]; then
-                    start_mlx_server
-                else
-                    start_llama_server
-                fi
+                start_llama_server
                 start_ollama
-                start_proxy_27b "$BACKEND_27B"
+                start_proxy_27b "llama"
                 start_proxy_35b
                 ;;
             stop)
                 stop_service "proxy-27b" "27B proxy" "nothink_proxy.py.*--port[ =]${LLAMA_PROXY_PORT}" 1
-                stop_service "proxy-35b" "Ollama proxy (35B / optional 8B no-think)" "nothink_proxy.py.*--port[ =]${OLLAMA_PROXY_PORT}" 1
+                stop_service "proxy-35b" "Ollama proxy" "nothink_proxy.py.*--port[ =]${OLLAMA_PROXY_PORT}" 1
                 ;;
             status)
                 status_line "27B proxy" "$LLAMA_PROXY_PORT" "/health" "proxy-27b" "nothink_proxy.py.*--port[ =]${LLAMA_PROXY_PORT}"
-                status_line "Ollama proxy (35B / optional 8B no-think)" "$OLLAMA_PROXY_PORT" "/health" "proxy-35b" "nothink_proxy.py.*--port[ =]${OLLAMA_PROXY_PORT}"
+                status_line "Ollama proxy" "$OLLAMA_PROXY_PORT" "/health" "proxy-35b" "nothink_proxy.py.*--port[ =]${OLLAMA_PROXY_PORT}"
                 ;;
             *)
                 usage

@@ -33,6 +33,7 @@ class ProxyConfig:
     nothink_top_p: float
     think_temp: float
     think_top_p: float
+    warp_ctx_soft_limit: int
 
 
 def default_upstream(mode: str) -> str:
@@ -49,6 +50,16 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 MODE = os.environ.get("AI_LOCAL_PROXY_MODE", "llama")
 CONFIG = ProxyConfig(
     mode=MODE,
@@ -59,6 +70,7 @@ CONFIG = ProxyConfig(
     nothink_top_p=_env_float("AI_LOCAL_NOTHINK_TOP_P", 0.95),
     think_temp=_env_float("AI_LOCAL_THINK_TEMP", 1.0),
     think_top_p=_env_float("AI_LOCAL_THINK_TOP_P", 0.95),
+    warp_ctx_soft_limit=_env_int("AI_LOCAL_WARP_CTX_SOFT_LIMIT", 28000),
 )
 
 
@@ -76,7 +88,11 @@ def json_log(event: str, **fields: Any) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.client = httpx.AsyncClient(timeout=CONFIG.timeout_s)
-    json_log("proxy_started", force_think=CONFIG.force_think)
+    json_log(
+        "proxy_started",
+        force_think=CONFIG.force_think,
+        warp_ctx_soft_limit=CONFIG.warp_ctx_soft_limit,
+    )
     try:
         yield
     finally:
@@ -149,6 +165,31 @@ def usage_from_payload(payload: dict[str, Any]) -> dict[str, int | None]:
         "completion_tokens": usage.get("completion_tokens"),
         "total_tokens": usage.get("total_tokens"),
     }
+
+
+def maybe_log_context_pressure(
+    req_id: str, usage: dict[str, int | None], *, stream: bool
+) -> None:
+    prompt_tokens = usage.get("prompt_tokens")
+    if not isinstance(prompt_tokens, int):
+        return
+
+    soft_limit = CONFIG.warp_ctx_soft_limit
+    if soft_limit <= 0 or prompt_tokens < soft_limit:
+        return
+
+    utilization_pct = round((prompt_tokens / soft_limit) * 100, 1)
+    json_log(
+        "context_pressure",
+        req_id=req_id,
+        stream=stream,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=usage.get("completion_tokens"),
+        total_tokens=usage.get("total_tokens"),
+        soft_limit_tokens=soft_limit,
+        utilization_pct=utilization_pct,
+        recommendation="start_new_conversation_or_reduce_context",
+    )
 
 
 async def proxy_json_get(path: str, timeout: float = 30.0) -> Response:
@@ -233,6 +274,7 @@ async def chat_completions(request: Request) -> Response:
             latency_ms=elapsed_ms,
             **usage,
         )
+        maybe_log_context_pressure(req_id, usage, stream=False)
         return JSONResponse(payload, status_code=upstream.status_code, headers=response_headers(upstream))
 
     async def stream_gen():
@@ -303,6 +345,7 @@ async def chat_completions(request: Request) -> Response:
                 latency_ms=elapsed_ms,
                 **usage,
             )
+            maybe_log_context_pressure(req_id, usage, stream=True)
 
     return StreamingResponse(stream_gen(), media_type="text/event-stream")
 
@@ -381,6 +424,7 @@ def main(argv: list[str] | None = None) -> int:
         nothink_top_p=_env_float("AI_LOCAL_NOTHINK_TOP_P", 0.95),
         think_temp=_env_float("AI_LOCAL_THINK_TEMP", 1.0),
         think_top_p=_env_float("AI_LOCAL_THINK_TOP_P", 0.95),
+        warp_ctx_soft_limit=_env_int("AI_LOCAL_WARP_CTX_SOFT_LIMIT", 28000),
     )
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
     return 0

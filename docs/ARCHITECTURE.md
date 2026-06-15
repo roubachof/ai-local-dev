@@ -1,16 +1,15 @@
 # Architecture
 
 ## Overview
-`ai-local-dev` exposes stable OpenAI-compatible local endpoints while allowing backend switching (MLX or llama.cpp for 27B, Ollama for 8B/35B) and think-control through a unified proxy.
+`ai-local-dev` exposes stable OpenAI-compatible local endpoints for llama.cpp (27B) and Ollama (8B/35B) stacks with think-control through a unified proxy.
 
 ## High-level flow
 ```mermaid
 flowchart LR
-    C[qwen-code / Goose / scripts]
+    C[OpenCode / Warp]
     P27[nothink_proxy.py :8081]
     P35[nothink_proxy.py :11435]
     R[model_router.py :8090]
-    MLX[mlx_lm.server :8082]
     Llama[llama-server :8080]
     Ollama[ollama serve :11434]
 
@@ -19,42 +18,39 @@ flowchart LR
     C --> R
     R --> P27
     R --> P35
-    P27 --> MLX
-    P27 -. fallback .-> Llama
+    P27 --> Llama
     P35 --> Ollama
 ```
 
 ## Components
 
 ### `bin/ai-local`
-Primary orchestrator command. Key responsibilities:
+Primary orchestrator. Key responsibilities:
 
 - starts/stops model backends and proxies
-- manages backend selection via `BACKEND_27B={mlx|llama}`
 - maintains PID files under `~/.local/state/ai-local/run/`
 - writes logs under `~/.local/state/ai-local/logs/`
-- updates `~/.qwen/settings.json` and `config/goose/config.yaml`
+- updates `~/.qwen/settings.json` for Warp/qwen-code integration
 
 ### `bin/nothink_proxy.py`
-Unified proxy for 27B and shared Ollama stacks (8B/35B).
+Unified proxy for 27B llama.cpp and Ollama stacks (8B/35B).
 
-- mode `llama`: used for 27B (MLX or llama.cpp upstream)
-- mode `ollama`: used for 8B/35B upstream
+- mode `llama`: 27B upstream (llama.cpp)
+- mode `ollama`: 8B/35B upstream (Ollama)
 - request mutation:
   - `chat_template_kwargs.enable_thinking=false` (template-level switch)
   - `enable_thinking=false` (legacy fallback)
   - `think=false` and `reasoning_effort=none` (Ollama defense-in-depth)
 - response mutation in nothink mode:
-  - strips `<think>...</think>` from JSON and SSE chunks
+  - strips `` from JSON and SSE chunks
 - exposes `/health` and `/v1/models` pass-throughs
 
 ### `bin/model_router.py`
-Optional helper endpoint that dispatches to 27B or shared Ollama proxy by requested `model` hint (`planner` vs `coder`).
+Optional helper endpoint that dispatches to 27B or Ollama proxy by requested `model` hint (`planner` vs `coder`).
 
 ### Backends
-- 27B primary: `mlx_lm.server` on `MLX_PORT` (default `8082`)
-- 27B fallback: `llama-server` on `LLAMA_PORT` (default `8080`)
-- 8B: Ollama on `OLLAMA_PORT` (default `11434`) via `OLLAMA_PROXY_PORT` (default `11435`)
+- 27B: `llama-server` on `LLAMA_PORT` (default `8080`) with 64K context + Q8_0 KV cache quantization
+- 8B: Ollama on `OLLAMA_PORT` (default `11434`)
 - 35B: Ollama on `OLLAMA_PORT` (default `11434`) via `OLLAMA_PROXY_PORT` (default `11435`)
 
 ## Think-control behavior
@@ -65,18 +61,16 @@ Optional helper endpoint that dispatches to 27B or shared Ollama proxy by reques
   - `OLLAMA_PROXY_FORCE_THINK`
   - `OLLAMA_PROXY_THINK`
 
-Verification script: `bin/verify_nothink.sh`
-
 ## Configuration model
 Defaults live in `config/.qwen-local.conf`, and local overrides are loaded from `config/.qwen-local.conf.local` when present.
 
 Important keys:
 
-- `BACKEND_27B`
-- `QWEN_27B_MLX_MODEL`
 - `QWEN_27B_MODEL`
+- `QWEN_35B_OLLAMA_MODEL`
 - `QWEN_8B_OLLAMA_MODEL`
 - `AI_LOCAL_FORCE_THINK`
+- `LLAMA_CTX_SIZE`, `LLAMA_CACHE_TYPE_K/V`
 - `AI_LOCAL_STATE_DIR`, `AI_LOCAL_LOG_DIR`, `AI_LOCAL_RUN_DIR`
 
 ## Security and locality

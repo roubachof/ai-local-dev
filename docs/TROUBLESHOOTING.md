@@ -14,15 +14,12 @@ These commands verify dependencies, config, and service health.
 ## Services do not start
 
 ### 27B backend fails
-Check backend mode and logs:
 
 ```bash
-ai-local config | grep BACKEND_27B
-ai-local logs mlx       # when BACKEND_27B=mlx
-ai-local logs llama     # when BACKEND_27B=llama
+ai-local logs llama
 ```
 
-If `BACKEND_27B=llama`, verify GGUF exists:
+Verify GGUF exists:
 
 ```bash
 ls -la ~/.local/share/llama-models/Qwen3.6-27B-UD-Q4_K_XL.gguf
@@ -71,18 +68,14 @@ ai-local restart 35b
 ```
 
 ## How to tell if thinking is really off
-Use the verifier:
+Inspect proxy logs for `"enable_thinking"` or `` markers:
 
 ```bash
-bin/verify_nothink.sh
+ai-local logs 27b
+ai-local logs 35b
 ```
 
-Expected result:
-
-- nothink completion tokens are at least 5x smaller than force-think
-- nothink latency is at least 2x faster than force-think
-
-If it fails, inspect proxy logs and ensure force-think env vars are not globally set.
+If you see thinking blocks, check that `AI_LOCAL_FORCE_THINK` is not globally set to `0`.
 
 ## Timeout errors
 Increase timeout in `config/.qwen-local.conf.local`:
@@ -105,7 +98,6 @@ Find the process:
 ```bash
 lsof -i :8080
 lsof -i :8081
-lsof -i :8082
 lsof -i :11434
 lsof -i :11435
 ```
@@ -128,4 +120,3 @@ pip install -r requirements.txt
 ## More references
 - [`ARCHITECTURE.md`](ARCHITECTURE.md)
 - [`THINK_CONTROL.md`](THINK_CONTROL.md)
-- [`MLX_MIGRATION.md`](MLX_MIGRATION.md)

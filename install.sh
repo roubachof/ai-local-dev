@@ -77,16 +77,7 @@ check_prerequisite "python3" "Python 3" || MISSING=$((MISSING+1))
 check_prerequisite "ollama" "Ollama" || MISSING=$((MISSING+1))
 check_prerequisite "curl" "curl" || MISSING=$((MISSING+1))
 check_prerequisite "node" "Node.js" || MISSING=$((MISSING+1))
-if check_prerequisite "llama-server" "llama-server (llama.cpp fallback)"; then
-    :
-else
-    log_warn "llama-server missing (optional unless BACKEND_27B=llama)"
-fi
-if python3 -c "import mlx_lm" >/dev/null 2>&1; then
-    log_info "mlx_lm Python module is installed"
-else
-    log_warn "mlx_lm Python module is missing (required for BACKEND_27B=mlx)"
-fi
+check_prerequisite "llama-server" "llama-server (llama.cpp)" || MISSING=$((MISSING+1))
 
 echo ""
 if [ $MISSING -gt 0 ]; then
@@ -106,7 +97,7 @@ if [ "$DRY_RUN" = false ]; then
         log_info "Created venv: $VENV_DIR"
     fi
     "$VENV_DIR/bin/pip" install -q -r "$REPO_DIR/requirements.txt"
-    log_info "Installed Python dependencies (fastapi, httpx, uvicorn, mlx-lm)"
+    log_info "Installed Python dependencies (fastapi, httpx, uvicorn)"
 else
     echo "   [DRY RUN] Would set up venv and install dependencies"
 fi
@@ -123,29 +114,8 @@ echo ""
 # 4. Create symlinks for all executable files
 echo "🔗 Creating symlinks..."
 symlink_file "$REPO_DIR/bin/ai-local"                   "ai-local"
-symlink_file "$REPO_DIR/bin/ollama_nothink_proxy.py"     "ollama_nothink_proxy.py"
-symlink_file "$REPO_DIR/bin/llama_nonthink_proxy.py"     "llama_nonthink_proxy.py"
 symlink_file "$REPO_DIR/bin/nothink_proxy.py"            "nothink_proxy.py"
 symlink_file "$REPO_DIR/bin/model_router.py"             "model_router.py"
-symlink_file "$REPO_DIR/bin/verify_nothink.sh"           "verify_nothink.sh"
-echo ""
-
-# 4b. Setup Goose config symlink
-echo "🔗 Setting up Goose configuration..."
-GOOSE_CONFIG_DIR="${HOME}/.config/goose"
-GOOSE_CONFIG_FILE="${GOOSE_CONFIG_DIR}/config.yaml"
-GOOSE_REPO_CONFIG="${REPO_DIR}/config/goose/config.yaml"
-if [ "$DRY_RUN" = false ]; then
-    mkdir -p "$GOOSE_CONFIG_DIR"
-    # Remove existing file/symlink
-    if [ -L "$GOOSE_CONFIG_FILE" ] || [ -f "$GOOSE_CONFIG_FILE" ]; then
-        rm -f "$GOOSE_CONFIG_FILE"
-    fi
-    ln -s "$GOOSE_REPO_CONFIG" "$GOOSE_CONFIG_FILE"
-    log_info "Symlinked Goose config: $GOOSE_CONFIG_FILE -> $GOOSE_REPO_CONFIG"
-else
-    echo "   [DRY RUN] Would symlink Goose config: $GOOSE_CONFIG_FILE -> $GOOSE_REPO_CONFIG"
-fi
 echo ""
 
 # 5. Setup shell aliases
@@ -161,8 +131,6 @@ if [ "$DRY_RUN" = false ]; then
             echo "alias ai35b='ai-local 35b'"
             echo "alias ai-status='ai-local status'"
             echo "alias ai-stop='ai-local stop'"
-            echo "alias ai-goose='ai-local goose'"
-            echo "alias ai-goose-think='ai-local goose think'"
         } >> "$ALIAS_FILE"
         log_info "Added aliases to $ALIAS_FILE"
     else
@@ -204,7 +172,6 @@ echo "Next steps:"
 echo "   1. Source your shell config: source $ALIAS_FILE"
 echo "   2. Check status: ai-local status"
 echo "   3. Start a model: ai-local 27b (or ai-local 8b)"
-echo "   4. Launch Goose: ai-local goose"
 echo ""
 echo "💡 Tip: To update, just run 'git pull' in $REPO_DIR"
 echo "   No reinstallation needed — symlinks point to the repo directly."

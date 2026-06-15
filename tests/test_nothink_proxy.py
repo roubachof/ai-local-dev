@@ -44,6 +44,7 @@ def test_apply_sampling_defaults_uses_mode_specific_defaults():
             nothink_top_p=0.95,
             think_temp=1.0,
             think_top_p=0.9,
+            warp_ctx_soft_limit=28000,
         )
         body = {}
         nothink_proxy.apply_sampling_defaults(body, force_think=False)
@@ -70,3 +71,68 @@ def test_usage_from_payload_extracts_tokens():
     assert usage["prompt_tokens"] == 12
     assert usage["completion_tokens"] == 34
     assert usage["total_tokens"] == 46
+
+
+def test_maybe_log_context_pressure_logs_warning(monkeypatch):
+    original = nothink_proxy.CONFIG
+    events = []
+
+    def fake_json_log(event: str, **fields):
+        events.append((event, fields))
+
+    try:
+        nothink_proxy.CONFIG = nothink_proxy.ProxyConfig(
+            mode="ollama",
+            upstream_url="http://127.0.0.1:11434",
+            timeout_s=600.0,
+            force_think=False,
+            nothink_temp=0.6,
+            nothink_top_p=0.95,
+            think_temp=1.0,
+            think_top_p=0.95,
+            warp_ctx_soft_limit=100,
+        )
+        monkeypatch.setattr(nothink_proxy, "json_log", fake_json_log)
+        nothink_proxy.maybe_log_context_pressure(
+            "req-ctx",
+            {"prompt_tokens": 123, "completion_tokens": 20, "total_tokens": 143},
+            stream=True,
+        )
+        assert len(events) == 1
+        event, fields = events[0]
+        assert event == "context_pressure"
+        assert fields["req_id"] == "req-ctx"
+        assert fields["prompt_tokens"] == 123
+        assert fields["soft_limit_tokens"] == 100
+    finally:
+        nothink_proxy.CONFIG = original
+
+
+def test_maybe_log_context_pressure_skips_when_below_limit(monkeypatch):
+    original = nothink_proxy.CONFIG
+    events = []
+
+    def fake_json_log(event: str, **fields):
+        events.append((event, fields))
+
+    try:
+        nothink_proxy.CONFIG = nothink_proxy.ProxyConfig(
+            mode="ollama",
+            upstream_url="http://127.0.0.1:11434",
+            timeout_s=600.0,
+            force_think=False,
+            nothink_temp=0.6,
+            nothink_top_p=0.95,
+            think_temp=1.0,
+            think_top_p=0.95,
+            warp_ctx_soft_limit=200,
+        )
+        monkeypatch.setattr(nothink_proxy, "json_log", fake_json_log)
+        nothink_proxy.maybe_log_context_pressure(
+            "req-ok",
+            {"prompt_tokens": 150, "completion_tokens": 20, "total_tokens": 170},
+            stream=False,
+        )
+        assert events == []
+    finally:
+        nothink_proxy.CONFIG = original

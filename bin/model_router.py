@@ -44,7 +44,7 @@ def choose_target(model_name: str | None) -> str:
         "coder",
         "code",
         "qwen-coder",
-        "qwen3.6:35b-a3b",
+        "qwen3.6:35b-ud-q4xl",
         "local-35b",
         "qwen3:8b",
         "qwen3.6:8b",

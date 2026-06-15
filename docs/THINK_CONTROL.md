@@ -6,7 +6,7 @@
 ## Disable mechanism (current behavior)
 For `POST /v1/chat/completions`, the unified proxy applies:
 
-- `chat_template_kwargs.enable_thinking=false` (Qwen template-level switch, used by llama.cpp and MLX)
+- `chat_template_kwargs.enable_thinking=false` (Qwen template-level switch, used by llama.cpp)
 - `enable_thinking=false` (legacy fallback key)
 - `think=false` and `reasoning_effort=none` (defense-in-depth for Ollama)
 
@@ -26,18 +26,6 @@ Legacy aliases are still supported:
 - `LLAMA_PROXY_FORCE_THINK=1`
 - `OLLAMA_PROXY_FORCE_THINK=1`
 - `OLLAMA_PROXY_THINK=1`
-
-## Verify that thinking is really disabled
-Use the regression script:
-
-```bash
-bin/verify_nothink.sh
-```
-
-It compares nothink vs force-think on both proxies and fails if:
-
-- nothink completion tokens are not at least 5x smaller than force-think
-- nothink latency is not at least 2x faster than force-think
 
 ## Logs
 All runtime logs are now under:
