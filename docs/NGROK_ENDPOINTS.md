@@ -1,6 +1,6 @@
 # Expose ai-local model endpoints with ngrok
 
-Use this guide to expose each local model endpoint (27B, 35B, 8B, router) with `ngrok` and connect external clients like Warp.
+Use this guide to expose each local model endpoint (27B, 35B, router) with `ngrok` and connect external clients like Warp.
 
 ## Prerequisites
 
@@ -18,27 +18,22 @@ Use this guide to expose each local model endpoint (27B, 35B, 8B, router) with `
   - Start stack: `ai-local 27b`
   - Typical model name: `local-27b`
 
-- **35B via proxy (no-think path)**
+- **35B via proxy (no-think path, llama.cpp default)**
   - Local URL: `http://127.0.0.1:11435/v1`
   - Start stack: `ai-local 35b`
-  - Typical model name: `qwen3.6:35b-ud-q4xl`
+  - Typical model name: `Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL` (or `local-35b` / `coder` via the router)
 
-- **35B direct Ollama (Think mode path)**
+- **35B direct Ollama (legacy think-mode path, requires `ollama`)**
   - Local URL: `http://127.0.0.1:11434/v1`
-  - Start stack: `ai-local 35b`
+  - Start stack: `ai-local 35b-ollama`
   - Model name: `qwen3.6:35b-ud-q4xl`
-
-- **8B direct Ollama**
-  - Local URL: `http://127.0.0.1:11434/v1`
-  - Start stack: `ai-local 8b`
-  - Model name: `qwen3:8b`
 
 - **Router endpoint (single URL for planner/coder split)**
   - Local URL: `http://127.0.0.1:8090/v1`
   - Start stack: `ai-local router start`
   - Example model aliases:
-    - planner side: `planner`, `plan`, `local-27b`
-    - coder side: `coder`, `code`, `local-35b`, `local-8b`, `qwen3.6:35b-ud-q4xl`
+    - planner side: `planner`, `plan`, `local-27b`, `qwen3.6-27b`
+    - coder side: `coder`, `code`, `local-35b`, `qwen3.6:35b-ud-q4xl`
 
 ## Start ngrok for a target port
 
@@ -54,10 +49,10 @@ Examples:
 # 27B proxy
 ngrok http --host-header=rewrite 8081
 
-# 35B proxy
+# 35B proxy (llama.cpp default)
 ngrok http --host-header=rewrite 11435
 
-# 35B direct think
+# 35B direct think (legacy Ollama)
 ngrok http --host-header=rewrite 11434
 
 # Router
@@ -94,7 +89,7 @@ Optional chat completion check:
 curl -s https://<your-ngrok-domain>.ngrok-free.dev/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen3.6:35b-ud-q4xl",
+    "model": "local-35b",
     "messages": [{"role":"user","content":"Reply with exactly OK"}],
     "max_tokens": 10
   }'
@@ -106,7 +101,7 @@ In Warp **Add custom endpoint**:
 
 - **Endpoint URL**: `https://<your-ngrok-domain>.ngrok-free.dev/v1`
 - **API key**: any placeholder (example: `local`)
-- **Model name**: add the model IDs you want (`local-27b`, `qwen3.6:35b-ud-q4xl`, `qwen3:8b`, etc.)
+- **Model name**: add the model IDs you want (`local-27b`, `local-35b`, `Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL`, etc.)
 
 If Warp rejects parsing, try endpoint URL without `/v1` and keep model names unchanged.
 

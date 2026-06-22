@@ -74,15 +74,28 @@ echo ""
 
 MISSING=0
 check_prerequisite "python3" "Python 3" || MISSING=$((MISSING+1))
-check_prerequisite "ollama" "Ollama" || MISSING=$((MISSING+1))
 check_prerequisite "curl" "curl" || MISSING=$((MISSING+1))
 check_prerequisite "node" "Node.js" || MISSING=$((MISSING+1))
 check_prerequisite "llama-server" "llama-server (llama.cpp)" || MISSING=$((MISSING+1))
+# Ollama is now optional (only needed for the legacy `ai-local 35b-ollama` backend).
+check_prerequisite "ollama" "Ollama (optional)" || true
+
+# mlx-lm is optional (enables the MLX backend via `ai-local *-mlx`).
+# It is Apple-Silicon-only and pulled in via requirements.txt on arm64 macOS.
+if [[ "$(uname)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
+    if "$REPO_DIR/.venv/bin/python" -c "import mlx_lm.server" >/dev/null 2>&1 2>/dev/null || command -v mlx_lm.server >/dev/null 2>&1; then
+        log_info "mlx-lm is installed (MLX backend ready)"
+    else
+        log_warn "mlx-lm is NOT installed (optional; for MLX backend: pip install 'mlx-lm>=0.31')"
+    fi
+else
+    log_warn "mlx-lm skipped (Apple Silicon only; not available on $(uname -m))"
+fi
 
 echo ""
 if [ $MISSING -gt 0 ]; then
     log_warn "$MISSING prerequisite(s) missing. Install them before using ai-local-dev."
-    echo "   See: docs/SETUP_FIRST_TIME.md"
+    echo "   See: docs/SETUP_FIRST_TIME.md  (llama.cpp now drives both 27B and 35B)"
     echo ""
 fi
 
@@ -97,7 +110,7 @@ if [ "$DRY_RUN" = false ]; then
         log_info "Created venv: $VENV_DIR"
     fi
     "$VENV_DIR/bin/pip" install -q -r "$REPO_DIR/requirements.txt"
-    log_info "Installed Python dependencies (fastapi, httpx, uvicorn)"
+    log_info "Installed Python dependencies (fastapi, httpx, uvicorn; mlx-lm on Apple Silicon)"
 else
     echo "   [DRY RUN] Would set up venv and install dependencies"
 fi
@@ -127,19 +140,13 @@ if [ "$DRY_RUN" = false ]; then
             echo ""
             echo "# ai-local-dev aliases"
             echo "alias ai27b='ai-local 27b'"
-            echo "alias ai8b='ai-local 8b'"
             echo "alias ai35b='ai-local 35b'"
             echo "alias ai-status='ai-local status'"
             echo "alias ai-stop='ai-local stop'"
         } >> "$ALIAS_FILE"
         log_info "Added aliases to $ALIAS_FILE"
     else
-        if ! grep -q "alias ai8b='ai-local 8b'" "$ALIAS_FILE" 2>/dev/null; then
-            echo "alias ai8b='ai-local 8b'" >> "$ALIAS_FILE"
-            log_info "Added missing ai8b alias to $ALIAS_FILE"
-        else
-            log_info "Aliases already exist in $ALIAS_FILE"
-        fi
+        log_info "Aliases already exist in $ALIAS_FILE"
     fi
 else
     echo "   [DRY RUN] Would add aliases to $ALIAS_FILE"
@@ -170,8 +177,9 @@ echo "🎉 Installation complete!"
 echo ""
 echo "Next steps:"
 echo "   1. Source your shell config: source $ALIAS_FILE"
-echo "   2. Check status: ai-local status"
-echo "   3. Start a model: ai-local 27b (or ai-local 8b)"
+echo "   2. Download models: ai-local download 27b-mtp  &&  ai-local download 35b"
+echo "   3. Check status:      ai-local status"
+echo "   4. Start a model:     ai-local 27b  (or ai-local 35b)"
 echo ""
 echo "💡 Tip: To update, just run 'git pull' in $REPO_DIR"
 echo "   No reinstallation needed — symlinks point to the repo directly."

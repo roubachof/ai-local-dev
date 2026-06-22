@@ -37,7 +37,11 @@ class ProxyConfig:
 
 
 def default_upstream(mode: str) -> str:
-    return "http://127.0.0.1:11434" if mode == "ollama" else "http://127.0.0.1:8080"
+    if mode == "ollama":
+        return "http://127.0.0.1:11434"
+    if mode == "mlx":
+        return "http://127.0.0.1:8082"
+    return "http://127.0.0.1:8080"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -401,7 +405,7 @@ async def passthrough(full_path: str, request: Request) -> Response:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Unified nothink proxy for ai-local-dev.")
-    parser.add_argument("--mode", choices=["llama", "ollama"], default=CONFIG.mode)
+    parser.add_argument("--mode", choices=["llama", "ollama", "mlx"], default=CONFIG.mode)
     parser.add_argument("--port", type=int, default=None, help="Listen port. Defaults to 8081 (llama) or 11435 (ollama).")
     parser.add_argument("--upstream-url", default=None, help="Upstream base URL.")
     return parser.parse_args(argv)

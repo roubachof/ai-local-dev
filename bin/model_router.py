@@ -46,9 +46,6 @@ def choose_target(model_name: str | None) -> str:
         "qwen-coder",
         "qwen3.6:35b-ud-q4xl",
         "local-35b",
-        "qwen3:8b",
-        "qwen3.6:8b",
-        "local-8b",
     }:
         return ARGS.coder_url
     return DEFAULT_URL

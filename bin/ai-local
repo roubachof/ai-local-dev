@@ -101,49 +101,176 @@ stop_service() {
     fi
 }
 
-start_llama_server() {
-    ensure_state_dirs
-    if is_service_running "$LLAMA_PORT" "/health"; then
-        log_success "llama-server already running on port $LLAMA_PORT"
-        return 0
+# Build the hybrid-cache + MTP flag block shared by 27B and 35B llama-server.
+# These flags are the multi-turn agentic perf fix for Qwen3.6's Gated-DeltaNet
+# architecture: --ctx-checkpoints/--checkpoint-every-n-tokens give 40-80x warm-turn
+# prefill speedup; --swa-full bounds KV for the SWA attention layers; MTP gives
+# lossless speculative decode. Returns flags on stdout (no trailing newline issues).
+llama_hybrid_flags() {
+    local flags=()
+    flags+=(--flash-attn on)
+    flags+=(--cache-type-k "$LLAMA_CACHE_TYPE_K")
+    flags+=(--cache-type-v "$LLAMA_CACHE_TYPE_V")
+    flags+=(--swa-full)
+    flags+=(--ctx-checkpoints "$LLAMA_CTX_CHECKPOINTS")
+    # NOTE: --checkpoint-every-n-tokens was removed in llama.cpp build 9750; the
+    # interval is now auto-determined by llama-server. LLAMA_CHECKPOINT_EVERY_N_TOKENS
+    # is kept in config for documentation but is no longer passed as a flag.
+    if [[ "$LLAMA_PRESERVE_THINKING" == "1" ]]; then
+        # Required for checkpoint prefix reuse when thinking is on: without it the
+        # chat template strips reasoning from history and the prefix breaks every turn.
+        flags+=(--chat-template-kwargs '{"preserve_thinking": true}')
     fi
-    if [[ ! -f "$QWEN_27B_MODEL" ]]; then
-        log_error "Model not found: $QWEN_27B_MODEL"
-    fi
-    log_info "Starting llama-server on port $LLAMA_PORT"
-    nohup llama-server \
-        --model "$QWEN_27B_MODEL" \
-        --port "$LLAMA_PORT" \
-        --ctx-size "$LLAMA_CTX_SIZE" \
-        --temp "$LLAMA_TEMP" \
-        --top-p "$LLAMA_TOP_P" \
-        --top-k "$LLAMA_TOP_K" \
-        --n-gpu-layers "$LLAMA_GPU_LAYERS" \
-        --reasoning-format "$LLAMA_REASONING_FORMAT" \
-        --cache-type-k "$LLAMA_CACHE_TYPE_K" \
-        --cache-type-v "$LLAMA_CACHE_TYPE_V" \
-        > "$AI_LOCAL_LOG_DIR/llama-server.log" 2>&1 &
-    save_pid "llama" "$!"
-    wait_for_service "$LLAMA_PORT" "/health" "$SERVICE_STARTUP_WAIT" \
-        || log_error "llama-server failed to become healthy"
+    printf '%s\n' "${flags[@]}"
 }
 
-start_ollama() {
-    ensure_state_dirs
-    if is_service_running "$OLLAMA_PORT" "/api/tags"; then
-        log_success "Ollama already running on port $OLLAMA_PORT"
+# Build MTP flags for a given n-max, or print nothing if LLAMA_MTP=0.
+llama_mtp_flags() {
+    local n_max=$1
+    if [[ "$LLAMA_MTP" != "1" ]]; then
         return 0
     fi
-    command -v ollama >/dev/null 2>&1 || log_error "Ollama not installed: https://ollama.com"
-    log_info "Starting Ollama on port $OLLAMA_PORT"
-    nohup env \
-        OLLAMA_FLASH_ATTENTION="$OLLAMA_FLASH_ATTENTION" \
-        OLLAMA_KV_CACHE_TYPE="$OLLAMA_KV_CACHE_TYPE" \
-        OLLAMA_KEEP_ALIVE="$OLLAMA_KEEP_ALIVE" \
-        ollama serve > "$AI_LOCAL_LOG_DIR/ollama.log" 2>&1 &
-    save_pid "ollama" "$!"
-    wait_for_service "$OLLAMA_PORT" "/api/tags" "$SERVICE_STARTUP_WAIT" \
-        || log_error "Ollama failed to become healthy"
+    printf '%s\n' --spec-type draft-mtp --spec-draft-n-max "$n_max"
+}
+
+# Generalized llama-server launcher.
+#   $1 = pid service name ("llama" or "llama-35b")
+#   $2 = port
+#   $3 = model path
+#   $4 = ctx size
+#   $5 = mtp n-max (0 disables MTP)
+#   $6 = log file name
+start_llama_server_at() {
+    local service=$1
+    local port=$2
+    local model=$3
+    local ctx_size=$4
+    local mtp_n_max=$5
+    local log_file=$6
+
+    ensure_state_dirs
+    if is_service_running "$port" "/health"; then
+        log_success "llama-server (${service}) already running on port $port"
+        return 0
+    fi
+    if [[ ! -f "$model" ]]; then
+        log_error "Model not found: $model"
+    fi
+    log_info "Starting llama-server (${service}) on port $port (model: $(basename "$model"))"
+    # NOTE: mapfile is bash 4.0+; macOS ships bash 3.2. Populate arrays with a
+    # while-read loop over process substitution instead (works on bash 3.2+).
+    local -a hybrid=()
+    local line
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && hybrid+=("$line")
+    done < <(llama_hybrid_flags)
+    local -a mtp=()
+    if [[ "$mtp_n_max" != "0" && "$LLAMA_MTP" == "1" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && mtp+=("$line")
+        done < <(llama_mtp_flags "$mtp_n_max")
+    fi
+    # Build the argv with conditional MTP expansion. Under `set -u`, an empty
+    # array "${arr[@]}" is treated as unbound in bash 3.2; guard with ${arr[@]+...}.
+    local -a llama_argv=(
+        llama-server
+        --model "$model"
+        --port "$port"
+        --host 127.0.0.1
+        --ctx-size "$ctx_size"
+        --temp "$LLAMA_TEMP"
+        --top-p "$LLAMA_TOP_P"
+        --top-k "$LLAMA_TOP_K"
+        --n-gpu-layers "$LLAMA_GPU_LAYERS"
+        --reasoning-format "$LLAMA_REASONING_FORMAT"
+    )
+    llama_argv+=("${hybrid[@]}")
+    if [[ ${#mtp[@]} -gt 0 ]]; then
+        llama_argv+=("${mtp[@]}")
+    fi
+    nohup "${llama_argv[@]}" \
+        > "$AI_LOCAL_LOG_DIR/$log_file" 2>&1 &
+    save_pid "$service" "$!"
+    wait_for_service "$port" "/health" "$SERVICE_STARTUP_WAIT" \
+        || log_error "llama-server (${service}) failed to become healthy"
+}
+
+start_llama_server() {
+    # Prefer the MTP GGUF when available (it also serves as a valid non-MTP model:
+    # llama-server loads the MTP context but leaves it idle without --spec-type).
+    # Use the non-MTP GGUF only if explicitly requested via LLAMA_MTP=0 AND it exists;
+    # otherwise fall back to the MTP GGUF with speculative decoding disabled.
+    local model="$QWEN_27B_MODEL"
+    local mtp_n_max=0
+    if [[ "$LLAMA_MTP" == "1" && -f "$QWEN_27B_MTP_MODEL" ]]; then
+        model="$QWEN_27B_MTP_MODEL"
+        mtp_n_max="$LLAMA_MTP_N_MAX_27B"
+    elif [[ -f "$QWEN_27B_MTP_MODEL" ]]; then
+        # MTP off but only the MTP GGUF is present: use it without --spec-type.
+        model="$QWEN_27B_MTP_MODEL"
+        mtp_n_max=0
+    fi
+    start_llama_server_at "llama" "$LLAMA_PORT" "$model" "$LLAMA_CTX_SIZE" "$mtp_n_max" "llama-server.log"
+}
+
+start_llama_server_35b() {
+    # 35B-A3B MoE: same logic, with 128k ctx + the MoE-appropriate n-max.
+    local model="$QWEN_35B_MODEL"
+    local mtp_n_max=0
+    if [[ "$LLAMA_MTP" == "1" && -f "$QWEN_35B_MTP_MODEL" ]]; then
+        model="$QWEN_35B_MTP_MODEL"
+        mtp_n_max="$LLAMA_MTP_N_MAX_35B"
+    elif [[ -f "$QWEN_35B_MTP_MODEL" ]]; then
+        model="$QWEN_35B_MTP_MODEL"
+        mtp_n_max=0
+    fi
+    start_llama_server_at "llama-35b" "$LLAMA_35B_PORT" "$model" "$LLAMA_35B_CTX_SIZE" "$mtp_n_max" "llama-server-35b.log"
+}
+
+find_mlx_lm_server() {
+    # mlx_lm.server may be available as a module (python -m mlx_lm.server) even if the
+    # console script isn't on PATH. Prefer the venv python if present.
+    local py
+    py="$(find_python)"
+    if "$py" -c "import mlx_lm.server" >/dev/null 2>&1; then
+        echo "$py -m mlx_lm.server"
+        return 0
+    fi
+    if command -v mlx_lm.server >/dev/null 2>&1; then
+        echo "mlx_lm.server"
+        return 0
+    fi
+    return 1
+}
+
+start_mlx_server() {
+    local service=$1   # "mlx" or "mlx-35b"
+    local port=$2
+    local model=$3
+    local log_file=$4
+
+    ensure_state_dirs
+    if is_service_running "$port" "/health"; then
+        log_success "mlx_lm.server (${service}) already running on port $port"
+        return 0
+    fi
+    local mlx_cmd
+    mlx_cmd="$(find_mlx_lm_server || true)"
+    if [[ -z "$mlx_cmd" ]]; then
+        log_error "mlx-lm not installed: pip install 'mlx-lm>=0.31' (requires Apple Silicon)"
+    fi
+    log_info "Starting mlx_lm.server (${service}) on port $port (model: $model)"
+    # mlx_lm.server has no --ctx-size flag; context is governed by the model config
+    # (Qwen3.6 = 262k native) and the client's session token limit.
+    # shellcheck disable=SC2086
+    nohup $mlx_cmd \
+        --model "$model" \
+        --port "$port" \
+        --host 127.0.0.1 \
+        > "$AI_LOCAL_LOG_DIR/$log_file" 2>&1 &
+    save_pid "$service" "$!"
+    wait_for_service "$port" "/health" "$SERVICE_STARTUP_WAIT" \
+        || log_error "mlx_lm.server (${service}) failed to become healthy"
 }
 
 start_proxy() {
@@ -184,12 +311,26 @@ start_proxy() {
 }
 
 start_proxy_27b() {
-    local upstream="http://127.0.0.1:${LLAMA_PORT}"
-    start_proxy "proxy-27b" "llama" "$LLAMA_PROXY_PORT" "$upstream" "proxy-27b.log"
+    local mode="${1:-llama}"
+    local upstream
+    if [[ "$mode" == "mlx" ]]; then
+        upstream="http://127.0.0.1:${MLX_PORT}"
+    else
+        upstream="http://127.0.0.1:${LLAMA_PORT}"
+    fi
+    start_proxy "proxy-27b" "$mode" "$LLAMA_PROXY_PORT" "$upstream" "proxy-27b.log"
 }
 
 start_proxy_35b() {
-    start_proxy "proxy-35b" "ollama" "$OLLAMA_PROXY_PORT" "http://127.0.0.1:${OLLAMA_PORT}" "proxy-35b.log"
+    local mode="${1:-llama}"
+    local upstream
+    case "$mode" in
+        llama) upstream="http://127.0.0.1:${LLAMA_35B_PORT}" ;;
+        mlx)   upstream="http://127.0.0.1:${MLX_PORT_35B}" ;;
+        ollama) upstream="http://127.0.0.1:${OLLAMA_PORT:-11434}" ;;
+        *) upstream="http://127.0.0.1:${LLAMA_35B_PORT}" ;;
+    esac
+    start_proxy "proxy-35b" "$mode" "$PROXY_35B_PORT" "$upstream" "proxy-35b.log"
 }
 
 start_router() {
@@ -204,7 +345,7 @@ start_router() {
     nohup "$py" "$AI_LOCAL_DEV_DIR/bin/model_router.py" \
         --port "$ROUTER_PORT" \
         --planner-url "http://127.0.0.1:${LLAMA_PROXY_PORT}" \
-        --coder-url "http://127.0.0.1:${OLLAMA_PROXY_PORT}" \
+        --coder-url "http://127.0.0.1:${PROXY_35B_PORT}" \
         > "$AI_LOCAL_LOG_DIR/router.log" 2>&1 &
     save_pid "router" "$!"
     wait_for_service "$ROUTER_PORT" "/health" "$SERVICE_STARTUP_WAIT" \
@@ -214,11 +355,14 @@ start_router() {
 stop_27b() {
     stop_service "proxy-27b" "27B proxy" "nothink_proxy.py.*--port[ =]${LLAMA_PROXY_PORT}" 1
     stop_service "llama" "llama-server" "llama-server.*--port[ =]${LLAMA_PORT}" 1
+    stop_service "mlx" "mlx_lm.server (27B)" "mlx_lm.server.*--port[ =]${MLX_PORT}" 1
 }
 
 stop_35b() {
-    stop_service "proxy-35b" "Ollama proxy (35B / optional 8B no-think)" "nothink_proxy.py.*--port[ =]${OLLAMA_PROXY_PORT}" 1
-    # Only stop ollama if ai-local started it (PID file exists).
+    stop_service "proxy-35b" "35B proxy" "nothink_proxy.py.*--port[ =]${PROXY_35B_PORT}" 1
+    stop_service "llama-35b" "llama-server (35B)" "llama-server.*--port[ =]${LLAMA_35B_PORT}" 1
+    stop_service "mlx-35b" "mlx_lm.server (35B)" "mlx_lm.server.*--port[ =]${MLX_PORT_35B}" 1
+    # Only stop ollama if ai-local started it (PID file exists) — kept for the optional ollama backend.
     stop_service "ollama" "Ollama" "" 0
 }
 
@@ -281,8 +425,10 @@ show_status() {
     echo ""
     status_line "llama-server (27B)" "$LLAMA_PORT" "/health" "llama" "llama-server.*--port[ =]${LLAMA_PORT}"
     status_line "27B proxy" "$LLAMA_PROXY_PORT" "/health" "proxy-27b" "nothink_proxy.py.*--port[ =]${LLAMA_PROXY_PORT}"
-    status_line "Ollama (8B/35B)" "$OLLAMA_PORT" "/api/tags" "ollama" "ollama serve"
-    status_line "Ollama proxy (35B/8B no-think)" "$OLLAMA_PROXY_PORT" "/health" "proxy-35b" "nothink_proxy.py.*--port[ =]${OLLAMA_PROXY_PORT}"
+    status_line "llama-server (35B)" "$LLAMA_35B_PORT" "/health" "llama-35b" "llama-server.*--port[ =]${LLAMA_35B_PORT}"
+    status_line "35B proxy" "$PROXY_35B_PORT" "/health" "proxy-35b" "nothink_proxy.py.*--port[ =]${PROXY_35B_PORT}"
+    status_line "mlx_lm.server (27B)" "$MLX_PORT" "/health" "mlx" "mlx_lm.server.*--port[ =]${MLX_PORT}"
+    status_line "mlx_lm.server (35B)" "$MLX_PORT_35B" "/health" "mlx-35b" "mlx_lm.server.*--port[ =]${MLX_PORT_35B}"
     status_line "model-router" "$ROUTER_PORT" "/health" "router" "model_router.py.*--port[ =]${ROUTER_PORT}"
     echo ""
     echo "Logs: $AI_LOCAL_LOG_DIR"
@@ -296,14 +442,14 @@ enforce_single_model_mode() {
     fi
     case "$target" in
         27b)
-            if is_service_running "$OLLAMA_PORT" "/api/tags" || is_service_running "$OLLAMA_PROXY_PORT" "/health"; then
-                log_info "Single-model mode: stopping Ollama/35B stack before starting 27B"
+            if is_service_running "$LLAMA_35B_PORT" "/health" || is_service_running "$PROXY_35B_PORT" "/health"; then
+                log_info "Single-model mode: stopping 35B stack before starting 27B"
                 stop_35b
             fi
             ;;
-        ollama)
+        35b)
             if is_service_running "$LLAMA_PROXY_PORT" "/health" || is_service_running "$LLAMA_PORT" "/health"; then
-                log_info "Single-model mode: stopping 27B stack before starting Ollama model"
+                log_info "Single-model mode: stopping 27B stack before starting 35B"
                 stop_27b
             fi
             ;;
@@ -311,39 +457,90 @@ enforce_single_model_mode() {
 }
 
 start_27b_with_backend() {
+    local backend="${1:-$BACKEND_27B}"
     enforce_single_model_mode "27b"
-    start_llama_server
-    local qwen_model_id
-    qwen_model_id="$(basename "$QWEN_27B_MODEL")"
-    start_proxy_27b "llama"
-    update_qwen_settings "http://127.0.0.1:${LLAMA_PROXY_PORT}/v1" "$qwen_model_id"
-    log_success "Qwen3.6-27B ready on http://127.0.0.1:${LLAMA_PROXY_PORT}/v1"
+    if [[ "$backend" == "mlx" ]]; then
+        start_mlx_server "mlx" "$MLX_PORT" "$QWEN_27B_MLX_MODEL" "mlx-server.log"
+        start_proxy_27b "mlx"
+        update_qwen_settings "http://127.0.0.1:${LLAMA_PROXY_PORT}/v1" "$QWEN_27B_MLX_MODEL"
+        log_success "Qwen3.6-27B (MLX) ready on http://127.0.0.1:${LLAMA_PROXY_PORT}/v1"
+    else
+        start_llama_server
+        local qwen_model_id
+        if [[ "$LLAMA_MTP" == "1" && -f "$QWEN_27B_MTP_MODEL" ]]; then
+            qwen_model_id="$(basename "$QWEN_27B_MTP_MODEL")"
+        else
+            qwen_model_id="$(basename "$QWEN_27B_MODEL")"
+        fi
+        start_proxy_27b "llama"
+        update_qwen_settings "http://127.0.0.1:${LLAMA_PROXY_PORT}/v1" "$qwen_model_id"
+        log_success "Qwen3.6-27B (llama.cpp) ready on http://127.0.0.1:${LLAMA_PROXY_PORT}/v1"
+    fi
 }
 start_35b_stack() {
-    enforce_single_model_mode "ollama"
-    start_ollama
-    start_proxy_35b
-    update_qwen_settings "http://127.0.0.1:${OLLAMA_PROXY_PORT}/v1" "$QWEN_35B_OLLAMA_MODEL"
-    log_success "$QWEN_35B_OLLAMA_MODEL ready on http://127.0.0.1:${OLLAMA_PROXY_PORT}/v1"
+    local backend="${1:-$BACKEND_35B}"
+    enforce_single_model_mode "35b"
+    case "$backend" in
+        mlx)
+            start_mlx_server "mlx-35b" "$MLX_PORT_35B" "$QWEN_35B_MLX_MODEL" "mlx-server-35b.log"
+            start_proxy_35b "mlx"
+            update_qwen_settings "http://127.0.0.1:${PROXY_35B_PORT}/v1" "$QWEN_35B_MLX_MODEL"
+            log_success "$QWEN_35B_MLX_MODEL (MLX) ready on http://127.0.0.1:${PROXY_35B_PORT}/v1"
+            ;;
+        ollama)
+            # Optional Ollama backend kept for compatibility.
+            start_ollama
+            start_proxy_35b "ollama"
+            update_qwen_settings "http://127.0.0.1:${PROXY_35B_PORT}/v1" "qwen3.6:35b-ud-q4xl"
+            log_success "qwen3.6:35b-ud-q4xl (Ollama) ready on http://127.0.0.1:${PROXY_35B_PORT}/v1"
+            ;;
+        llama|*)
+            start_llama_server_35b
+            local qwen_model_id
+            if [[ "$LLAMA_MTP" == "1" && -f "$QWEN_35B_MTP_MODEL" ]]; then
+                qwen_model_id="$(basename "$QWEN_35B_MTP_MODEL")"
+            else
+                qwen_model_id="$(basename "$QWEN_35B_MODEL")"
+            fi
+            start_proxy_35b "llama"
+            update_qwen_settings "http://127.0.0.1:${PROXY_35B_PORT}/v1" "$qwen_model_id"
+            log_success "Qwen3.6-35B-A3B (llama.cpp) ready on http://127.0.0.1:${PROXY_35B_PORT}/v1"
+            ;;
+    esac
 }
-start_8b_stack() {
-    enforce_single_model_mode "ollama"
-    start_ollama
-    update_qwen_settings "http://127.0.0.1:${OLLAMA_PORT}/v1" "$QWEN_8B_OLLAMA_MODEL"
-    log_success "$QWEN_8B_OLLAMA_MODEL ready on http://127.0.0.1:${OLLAMA_PORT}/v1"
+# Optional Ollama backend (kept for users who prefer it; not a primary stack).
+# Referenced by the `ollama` branch of start_35b_stack and `ai-local 35b-ollama`.
+start_ollama() {
+    ensure_state_dirs
+    if is_service_running "${OLLAMA_PORT:-11434}" "/api/tags"; then
+        log_success "Ollama already running on port ${OLLAMA_PORT:-11434}"
+        return 0
+    fi
+    command -v ollama >/dev/null 2>&1 || log_error "Ollama not installed: https://ollama.com"
+    log_info "Starting Ollama on port ${OLLAMA_PORT:-11434}"
+    nohup env \
+        OLLAMA_FLASH_ATTENTION="${OLLAMA_FLASH_ATTENTION:-1}" \
+        OLLAMA_KV_CACHE_TYPE="${OLLAMA_KV_CACHE_TYPE:-q8_0}" \
+        OLLAMA_KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:-30m}" \
+        ollama serve > "$AI_LOCAL_LOG_DIR/ollama.log" 2>&1 &
+    save_pid "ollama" "$!"
+    wait_for_service "${OLLAMA_PORT:-11434}" "/api/tags" "$SERVICE_STARTUP_WAIT" \
+        || log_error "Ollama failed to become healthy"
 }
+
 show_logs() {
     local service=$1
     local file=""
     case "$service" in
         27b|27b-proxy|proxy-27b) file="$AI_LOCAL_LOG_DIR/proxy-27b.log" ;;
         llama|27b-llama) file="$AI_LOCAL_LOG_DIR/llama-server.log" ;;
-        8b) file="$AI_LOCAL_LOG_DIR/ollama.log" ;;
-        8b-proxy) file="$AI_LOCAL_LOG_DIR/proxy-35b.log" ;;
+        mlx|27b-mlx) file="$AI_LOCAL_LOG_DIR/mlx-server.log" ;;
+        mlx-35b|35b-mlx) file="$AI_LOCAL_LOG_DIR/mlx-server-35b.log" ;;
+        35b-llama|llama-35b) file="$AI_LOCAL_LOG_DIR/llama-server-35b.log" ;;
         35b|35b-proxy|proxy-35b) file="$AI_LOCAL_LOG_DIR/proxy-35b.log" ;;
-        ollama) file="$AI_LOCAL_LOG_DIR/ollama.log" ;;
+        ollama|35b-ollama) file="$AI_LOCAL_LOG_DIR/ollama.log" ;;
         router) file="$AI_LOCAL_LOG_DIR/router.log" ;;
-        *) log_error "Unknown logs target: $service" ;;
+        *) log_error "Unknown logs target: $service (try: 27b, llama, 35b, 35b-llama, mlx, ollama, router)" ;;
     esac
     [[ -f "$file" ]] || log_error "Log file not found: $file"
     tail -n 200 -f "$file"
@@ -351,39 +548,70 @@ show_logs() {
 
 download_model() {
     local target=$1
+    local models_dir="$HOME/.local/share/llama-models"
+    local mtp_dir="$models_dir/mtp"
+    # MTP GGUFs go into a dedicated `mtp/` subdir because unsloth's MTP repos name
+    # files WITHOUT an -MTP- suffix (same filename as the non-MTP repo). Downloading
+    # into the shared dir would silently overwrite the non-MTP GGUF of the same name.
     case "$target" in
         27b)
             command -v huggingface-cli >/dev/null 2>&1 || log_error "huggingface-cli is required for 27b download"
-            mkdir -p "$(dirname "$QWEN_27B_MODEL")"
+            mkdir -p "$models_dir"
             huggingface-cli download unsloth/Qwen3.6-27B-GGUF \
                 Qwen3.6-27B-UD-Q4_K_XL.gguf \
-                --local-dir "$(dirname "$QWEN_27B_MODEL")"
+                --local-dir "$models_dir"
             ;;
-        35b)
-            command -v ollama >/dev/null 2>&1 || log_error "Ollama not installed"
-            ollama pull "$QWEN_35B_OLLAMA_MODEL"
+        27b-mtp)
+            command -v huggingface-cli >/dev/null 2>&1 || log_error "huggingface-cli is required for 27b-mtp download"
+            mkdir -p "$mtp_dir"
+            huggingface-cli download unsloth/Qwen3.6-27B-MTP-GGUF \
+                --include "*UD-Q4_K_XL*" \
+                --local-dir "$mtp_dir"
+            log_info "27B MTP GGUF downloaded to $mtp_dir. Start with: ai-local 27b"
             ;;
-        8b)
+        35b|35b-llama)
+            command -v huggingface-cli >/dev/null 2>&1 || log_error "huggingface-cli is required for 35b download"
+            mkdir -p "$mtp_dir"
+            huggingface-cli download unsloth/Qwen3.6-35B-A3B-MTP-GGUF \
+                --include "*UD-Q4_K_XL*" \
+                --local-dir "$mtp_dir"
+            log_info "35B MTP GGUF downloaded to $mtp_dir. Start with: ai-local 35b"
+            ;;
+        35b-ollama)
             command -v ollama >/dev/null 2>&1 || log_error "Ollama not installed"
-            ollama pull "$QWEN_8B_OLLAMA_MODEL"
+            ollama pull qwen3.6:35b-ud-q4xl
+            ;;
+        27b-mlx)
+            command -v huggingface-cli >/dev/null 2>&1 || log_error "huggingface-cli is required for 27b-mlx download"
+            mkdir -p "$HOME/.local/share/mlx-models"
+            huggingface-cli download "$QWEN_27B_MLX_MODEL" \
+                --local-dir "$HOME/.local/share/mlx-models/$(basename "$QWEN_27B_MLX_MODEL")"
+            ;;
+        35b-mlx)
+            command -v huggingface-cli >/dev/null 2>&1 || log_error "huggingface-cli is required for 35b-mlx download"
+            mkdir -p "$HOME/.local/share/mlx-models"
+            huggingface-cli download "$QWEN_35B_MLX_MODEL" \
+                --local-dir "$HOME/.local/share/mlx-models/$(basename "$QWEN_35B_MLX_MODEL")"
             ;;
         *)
-            log_error "Unknown download target: $target (expected 27b, 8b, 35b)"
+            log_error "Unknown download target: $target (expected 27b, 27b-mtp, 35b, 35b-llama, 35b-ollama, 27b-mlx, 35b-mlx)"
             ;;
     esac
 }
 
 doctor() {
     local failed=0
-    local required_cmds=("python3" "curl" "node")
-    local optional_cmds=("ollama" "llama-server" "huggingface-cli")
+    local required_cmds=("python3" "curl" "node" "llama-server")
+    local optional_cmds=("huggingface-cli" "ollama")
+    local py
+    py="$(find_python)"
 
     echo "=== ai-local doctor ==="
     for cmd in "${required_cmds[@]}"; do
         if command -v "$cmd" >/dev/null 2>&1; then
-            log_success "Found command: $cmd"
+            log_success "Found required command: $cmd"
         else
-            log_warn "Missing command: $cmd"
+            log_warn "Missing required command: $cmd"
             failed=1
         fi
     done
@@ -396,8 +624,6 @@ doctor() {
         fi
     done
 
-    local py
-    py="$(find_python)"
     if "$py" -c "import fastapi, httpx, uvicorn" >/dev/null 2>&1; then
         log_success "Python proxy dependencies import correctly"
     else
@@ -405,9 +631,33 @@ doctor() {
         failed=1
     fi
 
+    if "$py" -c "import mlx_lm.server" >/dev/null 2>&1; then
+        log_success "mlx-lm available (MLX backend ready)"
+    else
+        log_warn "mlx-lm missing (optional; pip install 'mlx-lm>=0.31' for MLX backend)"
+    fi
+
+    # 27B: require the non-MTP GGUF (MTP variant is recommended but optional).
     if [[ ! -f "$QWEN_27B_MODEL" ]]; then
         log_warn "27B GGUF missing: $QWEN_27B_MODEL"
         failed=1
+    else
+        log_success "27B GGUF present"
+    fi
+    if [[ -f "$QWEN_27B_MTP_MODEL" ]]; then
+        log_success "27B MTP GGUF present (recommended for +75% decode)"
+    else
+        log_warn "27B MTP GGUF missing (optional; ai-local download 27b-mtp)"
+    fi
+
+    # 35B: warn (not fail) if GGUFs are absent — download is ~22GB.
+    if [[ -f "$QWEN_35B_MTP_MODEL" ]]; then
+        log_success "35B MTP GGUF present"
+    else
+        log_warn "35B MTP GGUF missing (recommended): ai-local download 35b"
+    fi
+    if [[ -f "$QWEN_35B_MODEL" ]]; then
+        log_success "35B GGUF present (non-MTP fallback)"
     fi
 
     if is_service_running "$LLAMA_PROXY_PORT" "/health"; then
@@ -415,10 +665,10 @@ doctor() {
     else
         log_warn "27B proxy is not healthy on port $LLAMA_PROXY_PORT"
     fi
-    if is_service_running "$OLLAMA_PROXY_PORT" "/health"; then
-        log_success "Ollama proxy health check OK"
+    if is_service_running "$PROXY_35B_PORT" "/health"; then
+        log_success "35B proxy health check OK"
     else
-        log_warn "Ollama proxy is not healthy on port $OLLAMA_PROXY_PORT"
+        log_warn "35B proxy is not healthy on port $PROXY_35B_PORT"
     fi
 
     if [[ "$failed" -eq 0 ]]; then
@@ -432,10 +682,13 @@ doctor() {
 restart_stack() {
     local target=$1
     case "$target" in
-        27b)  stop_27b; start_27b_with_backend ;;
-        35b)  stop_35b; start_35b_stack ;;
-        8b)   stop_35b; start_8b_stack ;;
-        *)    log_error "Usage: ai-local restart [27b|8b|35b]" ;;
+        27b)        stop_27b; start_27b_with_backend ;;
+        27b-mlx)    stop_27b; start_27b_with_backend "mlx" ;;
+        27b-llama)  stop_27b; start_27b_with_backend "llama" ;;
+        35b|35b-llama) stop_35b; start_35b_stack "llama" ;;
+        35b-mlx)    stop_35b; start_35b_stack "mlx" ;;
+        35b-ollama) stop_35b; start_35b_stack "ollama" ;;
+        *)          log_error "Usage: ai-local restart [27b|27b-mlx|27b-llama|35b|35b-llama|35b-mlx|35b-ollama]" ;;
     esac
 }
 
@@ -444,20 +697,27 @@ usage() {
 ai-local — Local AI Orchestrator
 
 Usage:
-  ai-local 27b                   Start 27B llama.cpp stack
-  ai-local 8b                    Start 8B stack (direct Ollama)
-  ai-local 35b                   Start 35B stack (Ollama + proxy)
-  ai-local restart [27b|8b|35b]  Restart selected stack
-  ai-local stop [27b|8b|35b|all] Stop selected stack (or all by default)
+  ai-local 27b                   Start 27B stack (default backend: llama.cpp + MTP)
+  ai-local 27b-mlx               Start 27B stack via MLX
+  ai-local 27b-llama             Start 27B stack via llama.cpp
+  ai-local 35b                   Start 35B stack (default backend: llama.cpp + MTP, 128k ctx)
+  ai-local 35b-llama             Start 35B stack via llama.cpp
+  ai-local 35b-mlx               Start 35B stack via MLX (alternative)
+  ai-local 35b-ollama            Start 35B stack via Ollama (legacy)
+  ai-local restart [27b|27b-mlx|27b-llama|35b|35b-llama|35b-mlx|35b-ollama]
+  ai-local stop [27b|35b|all]    Stop selected stack (or all by default)
   ai-local status                Show service status
-  ai-local logs <service>        Tail logs (27b, llama, 8b, 35b, ollama, router)
-  ai-local download <target>     Download model (27b, 8b, 35b)
+  ai-local logs <service>        Tail logs (27b, llama, 35b, 35b-llama, mlx, ollama, router)
+  ai-local download <target>     Download model (27b, 27b-mtp, 35b, 35b-ollama, 27b-mlx, 35b-mlx)
   ai-local doctor                Run diagnostics
   ai-local config                Show resolved configuration
   ai-local proxy {start|stop|status}
   ai-local router {start|stop|status}
 
 Notes:
+  - Default llama.cpp backend uses --ctx-checkpoints + --spec-type draft-mtp
+    for multi-turn cache reuse (40-80x warm-turn speedup) + lossless MTP decode.
+    Set LLAMA_MTP=0 in config to disable MTP and fall back to the non-MTP GGUF.
   - Logs are stored in: $AI_LOCAL_LOG_DIR
   - Runtime PID files are stored in: $AI_LOCAL_RUN_DIR
   - Thinking control uses AI_LOCAL_FORCE_THINK=1 (legacy vars still supported)
@@ -471,11 +731,23 @@ case "$COMMAND" in
     27b)
         start_27b_with_backend
         ;;
-    8b)
-        start_8b_stack
+    27b-mlx)
+        start_27b_with_backend "mlx"
+        ;;
+    27b-llama)
+        start_27b_with_backend "llama"
         ;;
     35b)
         start_35b_stack
+        ;;
+    35b-llama)
+        start_35b_stack "llama"
+        ;;
+    35b-mlx)
+        start_35b_stack "mlx"
+        ;;
+    35b-ollama)
+        start_35b_stack "ollama"
         ;;
     restart)
         restart_stack "$SUBCOMMAND"
@@ -485,11 +757,10 @@ case "$COMMAND" in
         ;;
     stop)
         case "$SUBCOMMAND" in
-            27b) stop_27b ;;
-            8b) stop_35b ;;
-            35b) stop_35b ;;
+            27b|27b-mlx|27b-llama) stop_27b ;;
+            35b|35b-llama|35b-mlx|35b-ollama) stop_35b ;;
             ""|all) stop_all ;;
-            *) log_error "Usage: ai-local stop [27b|8b|35b|all]" ;;
+            *) log_error "Usage: ai-local stop [27b|35b|all]" ;;
         esac
         ;;
     logs)
@@ -510,17 +781,16 @@ case "$COMMAND" in
         case "$SUBCOMMAND" in
             start)
                 start_llama_server
-                start_ollama
                 start_proxy_27b "llama"
-                start_proxy_35b
+                start_proxy_35b "llama"
                 ;;
             stop)
                 stop_service "proxy-27b" "27B proxy" "nothink_proxy.py.*--port[ =]${LLAMA_PROXY_PORT}" 1
-                stop_service "proxy-35b" "Ollama proxy" "nothink_proxy.py.*--port[ =]${OLLAMA_PROXY_PORT}" 1
+                stop_service "proxy-35b" "35B proxy" "nothink_proxy.py.*--port[ =]${PROXY_35B_PORT}" 1
                 ;;
             status)
                 status_line "27B proxy" "$LLAMA_PROXY_PORT" "/health" "proxy-27b" "nothink_proxy.py.*--port[ =]${LLAMA_PROXY_PORT}"
-                status_line "Ollama proxy" "$OLLAMA_PROXY_PORT" "/health" "proxy-35b" "nothink_proxy.py.*--port[ =]${OLLAMA_PROXY_PORT}"
+                status_line "35B proxy" "$PROXY_35B_PORT" "/health" "proxy-35b" "nothink_proxy.py.*--port[ =]${PROXY_35B_PORT}"
                 ;;
             *)
                 usage

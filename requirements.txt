@@ -2,3 +2,15 @@
 fastapi>=0.100,<1
 httpx>=0.24,<1
 uvicorn>=0.23,<1
+
+# Accelerated + resumable downloads for the large GGUFs pulled by
+# `ai-local download 27b-mtp` / `35b` (~18-22GB). Rust multi-connection
+# transport; enabled automatically when huggingface_hub detects it. Without
+# this, mono-connection downloads stall on multi-hour runs.
+hf-transfer>=0.1.8
+
+# Optional: MLX backend for Apple Silicon (M-series Macs only).
+# Enables `ai-local 27b-mlx` / `ai-local 35b-mlx`. Pin >=0.31 for Qwen3.6
+# (qwen3_5 / qwen3_5_moe hybrid DeltaNet architecture) support.
+# Not installed automatically by install.sh on non-Apple-Silicon machines.
+mlx-lm>=0.31,<1; sys_platform == "darwin" and platform_machine == "arm64"
