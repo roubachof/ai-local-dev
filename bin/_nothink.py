@@ -7,29 +7,19 @@ import re
 THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
 
-def resolve_force_think(mode: str) -> bool:
-    """Resolve force-think mode with backward-compatible env-var aliases."""
+def resolve_force_think() -> bool:
+    """Resolve force-think from the canonical env var or the llama legacy alias."""
     if os.environ.get("AI_LOCAL_FORCE_THINK", "0") == "1":
         return True
-
-    mode_aliases = {
-        "llama": ("LLAMA_PROXY_FORCE_THINK",),
-        "ollama": ("OLLAMA_PROXY_FORCE_THINK", "OLLAMA_PROXY_THINK"),
-    }
-    for key in mode_aliases.get(mode, ()):
-        if os.environ.get(key, "0") == "1":
-            return True
+    if os.environ.get("LLAMA_PROXY_FORCE_THINK", "0") == "1":
+        return True
     return False
 
 
-def apply_disable_fields(body: dict, force_think: bool, mode: str) -> None:
+def apply_disable_fields(body: dict, force_think: bool) -> None:
     """Apply disable-thinking request fields in-place."""
     if force_think or not isinstance(body, dict):
         return
-
-    if mode == "ollama":
-        body.setdefault("reasoning_effort", "none")
-        body.setdefault("think", False)
 
     chat_kwargs = body.setdefault("chat_template_kwargs", {})
     if isinstance(chat_kwargs, dict):

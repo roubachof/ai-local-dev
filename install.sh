@@ -77,25 +77,11 @@ check_prerequisite "python3" "Python 3" || MISSING=$((MISSING+1))
 check_prerequisite "curl" "curl" || MISSING=$((MISSING+1))
 check_prerequisite "node" "Node.js" || MISSING=$((MISSING+1))
 check_prerequisite "llama-server" "llama-server (llama.cpp)" || MISSING=$((MISSING+1))
-# Ollama is now optional (only needed for the legacy `ai-local 35b-ollama` backend).
-check_prerequisite "ollama" "Ollama (optional)" || true
-
-# mlx-lm is optional (enables the MLX backend via `ai-local *-mlx`).
-# It is Apple-Silicon-only and pulled in via requirements.txt on arm64 macOS.
-if [[ "$(uname)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
-    if "$REPO_DIR/.venv/bin/python" -c "import mlx_lm.server" >/dev/null 2>&1 2>/dev/null || command -v mlx_lm.server >/dev/null 2>&1; then
-        log_info "mlx-lm is installed (MLX backend ready)"
-    else
-        log_warn "mlx-lm is NOT installed (optional; for MLX backend: pip install 'mlx-lm>=0.31')"
-    fi
-else
-    log_warn "mlx-lm skipped (Apple Silicon only; not available on $(uname -m))"
-fi
 
 echo ""
 if [ $MISSING -gt 0 ]; then
     log_warn "$MISSING prerequisite(s) missing. Install them before using ai-local-dev."
-    echo "   See: docs/SETUP_FIRST_TIME.md  (llama.cpp now drives both 27B and 35B)"
+    echo "   See: docs/SETUP_FIRST_TIME.md"
     echo ""
 fi
 
@@ -110,7 +96,7 @@ if [ "$DRY_RUN" = false ]; then
         log_info "Created venv: $VENV_DIR"
     fi
     "$VENV_DIR/bin/pip" install -q -r "$REPO_DIR/requirements.txt"
-    log_info "Installed Python dependencies (fastapi, httpx, uvicorn; mlx-lm on Apple Silicon)"
+    log_info "Installed Python dependencies (fastapi, httpx, uvicorn, hf-transfer)"
 else
     echo "   [DRY RUN] Would set up venv and install dependencies"
 fi

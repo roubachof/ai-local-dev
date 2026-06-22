@@ -27,12 +27,6 @@ Before installing `ai-local-dev`, install:
    brew install curl
    ```
 
-4. **Ollama** (optional — only for the legacy `ai-local 35b-ollama` backend)
-   ```bash
-   curl -fsSL https://ollama.com/install.sh | sh
-   ```
-   Most users can skip this; llama.cpp is the default for both models.
-
 ## Install
 
 ```bash
@@ -43,33 +37,20 @@ cd ai-local-dev
 
 ## Download models
 
-llama.cpp GGUFs live under `~/.local/share/llama-models/`. The 35B MTP GGUF is required for the default 35B backend; the 27B MTP GGUF is recommended (+75% decode) but optional (a non-MTP 27B GGUF works as a fallback).
+llama.cpp GGUFs live under `~/.local/share/llama-models/`. The 35B MTP GGUF is required for the default 35B backend; the 27B MTP GGUF is the default 27B model file (MTP speculative decoding is on by default — see `bench/README.md`; a non-MTP 27B GGUF works as an alternate).
 
 ```bash
-ai-local download 27b-mtp   # recommended: 27B + MTP (~18GB)
-ai-local download 27b       # optional: 27B non-MTP fallback (~18GB)
+ai-local download 27b-mtp   # 27B MTP GGUF (default model file, ~18GB)
+ai-local download 27b       # optional: 27B non-MTP GGUF (~18GB)
 ai-local download 35b       # 35B-A3B + MTP, 128k ctx (~22GB)
-# Optional MLX backends (Apple Silicon):
-ai-local download 27b-mlx
-ai-local download 35b-mlx
 ```
-
-> **Note:** the old Ollama 35B blob (`qwen3.6:35b-ud-q4xl`) cannot be reused for llama.cpp — Qwen3.6 changed `rope.dimension_sections` (3→4 elements), so llama-server rejects Ollama's old-layout blob. Re-download the GGUF above.
 
 ## Start services
 
 ```bash
-ai-local 27b          # llama.cpp + MTP + checkpoint (default)
-ai-local 35b          # llama.cpp + MTP + checkpoint, 128k ctx (default)
+ai-local 27b          # llama.cpp + checkpoint + MTP (on by default)
+ai-local 35b          # llama.cpp + checkpoint + MTP, 128k ctx
 ai-local status
-```
-
-Optional backends:
-
-```bash
-ai-local 27b-mlx      # MLX alternative for 27B
-ai-local 35b-mlx      # MLX alternative for 35B
-ai-local 35b-ollama   # legacy Ollama backend (requires `ollama`)
 ```
 
 Thinking mode:

@@ -30,17 +30,37 @@ python3 bench/bench_mtp.py --label mtp-off
 Options: `--url`, `--label`, `--max-tokens` (default 192), `--model` (default
 `qwen`). Results are written to `bench/results/bench_<label>.json`.
 
-## Result: 27B on Apple M3 Max (48 GB), llama.cpp build 9750, Q4_K_XL
+## Results: Apple M3 Max (48 GB), llama.cpp build 9750, Q4_K_XL
 
-| Run      | Aggregate tok/s | Notes                                  |
-|----------|-----------------|----------------------------------------|
-| MTP on   | 14.90           | Draft acceptance ~72% (from prior runs)|
-| MTP off  | 15.83           | Baseline                               |
+Aggregate tok/s = `sum(completion_tokens) / sum(wall_s)` across the 8-prompt suite.
+MTP was confirmed active by checking the `llama-server` log for the `--spec-type
+draft-mtp` flag; prior runs that showed no speedup were invalid because the config
+loader clobbered the `LLAMA_MTP=1` env override (now fixed — see `lib/qwen-config.sh:load_qwen_config`).
 
-**MTP on / MTP off = 0.94× — no speedup on Metal.** Draft tokens were accepted
-(~72% in earlier runs), so the speculative path works, but on the Metal backend
-the per-draft verification cost offsets the accepted-token gains. MTP
-speculative decoding shows real speedups on CUDA hardware; on Apple Silicon the
-recommended stable config is `LLAMA_MTP=0` unless you are running on CUDA.
+### 27B dense (Qwen3.6-27B-UD-Q4_K_XL, spec-draft-n-max=3)
 
-Raw JSON results live in `bench/results/`.
+| Run      | Aggregate tok/s | Notes             |
+|----------|-----------------|-------------------|
+| MTP on   | 14.47           | MTP enabled       |
+| MTP off  | 10.19           | Baseline          |
+
+**MTP on / MTP off = 1.42× (+42%) on the dense 27B.**
+
+### 35B-A3B MoE (Qwen3.6-35B-A3B-UD-Q4_K_XL, spec-draft-n-max=2)
+
+| Run      | Aggregate tok/s | Notes             |
+|----------|-----------------|-------------------|
+| MTP on   | 65.81           | MTP enabled       |
+| MTP off  | 53.68           | Baseline          |
+
+**MTP on / MTP off = 1.23× (+23%) on the 35B-A3B MoE.**
+
+## Conclusion
+
+MTP speculative decoding is a real net decode speedup on Apple Silicon/Metal on
+both the dense 27B (+42%) and the 35B-A3B MoE (+23%), so it is **on by default**
+(`LLAMA_MTP=1`). Set `LLAMA_MTP=0` only if you need the RAM the MTP draft context
+occupies or want the non-MTP baseline.
+
+Raw JSON results live in `bench/results/` (`bench_27b-mtp-{on,off}.json`,
+`bench_35b-mtp-{on,off}.json`).

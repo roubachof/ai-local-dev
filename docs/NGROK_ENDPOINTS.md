@@ -21,19 +21,14 @@ Use this guide to expose each local model endpoint (27B, 35B, router) with `ngro
 - **35B via proxy (no-think path, llama.cpp default)**
   - Local URL: `http://127.0.0.1:11435/v1`
   - Start stack: `ai-local 35b`
-  - Typical model name: `Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL` (or `local-35b` / `coder` via the router)
-
-- **35B direct Ollama (legacy think-mode path, requires `ollama`)**
-  - Local URL: `http://127.0.0.1:11434/v1`
-  - Start stack: `ai-local 35b-ollama`
-  - Model name: `qwen3.6:35b-ud-q4xl`
+  - Typical model name: `Qwen3.6-35B-A3B-UD-Q4_K_XL` (or `local-35b` / `coder` via the router)
 
 - **Router endpoint (single URL for planner/coder split)**
   - Local URL: `http://127.0.0.1:8090/v1`
   - Start stack: `ai-local router start`
   - Example model aliases:
     - planner side: `planner`, `plan`, `local-27b`, `qwen3.6-27b`
-    - coder side: `coder`, `code`, `local-35b`, `qwen3.6:35b-ud-q4xl`
+    - coder side: `coder`, `code`, `local-35b`, `qwen3.6-35b`
 
 ## Start ngrok for a target port
 
@@ -51,9 +46,6 @@ ngrok http --host-header=rewrite 8081
 
 # 35B proxy (llama.cpp default)
 ngrok http --host-header=rewrite 11435
-
-# 35B direct think (legacy Ollama)
-ngrok http --host-header=rewrite 11434
 
 # Router
 ngrok http --host-header=rewrite 8090
@@ -101,7 +93,7 @@ In Warp **Add custom endpoint**:
 
 - **Endpoint URL**: `https://<your-ngrok-domain>.ngrok-free.dev/v1`
 - **API key**: any placeholder (example: `local`)
-- **Model name**: add the model IDs you want (`local-27b`, `local-35b`, `Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL`, etc.)
+- **Model name**: add the model IDs you want (`local-27b`, `local-35b`, `Qwen3.6-35B-A3B-UD-Q4_K_XL`, etc.)
 
 If Warp rejects parsing, try endpoint URL without `/v1` and keep model names unchanged.
 

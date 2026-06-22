@@ -9,28 +9,34 @@ QWEN_LOCAL_CONF="${QWEN_LOCAL_CONF:-$AI_LOCAL_DEV_DIR/config/.qwen-local.conf}"
 QWEN_LOCAL_CONF_LOCAL="${QWEN_LOCAL_CONF_LOCAL:-$QWEN_LOCAL_CONF.local}"
 SETTINGS_FILE="${SETTINGS_FILE:-$HOME/.qwen/settings.json}"
 
+# Config var names that load_qwen_config snapshots before sourcing the conf
+# files so ad-hoc env overrides (e.g. `LLAMA_MTP=1 ai-local 35b`) survive. Keep
+# this in sync with the vars defined below.
+AI_LOCAL_CONFIG_VARS=(
+    LLAMA_PORT LLAMA_35B_PORT LLAMA_PROXY_PORT PROXY_35B_PORT ROUTER_PORT
+    QWEN_27B_MODEL QWEN_27B_MTP_MODEL QWEN_35B_MODEL QWEN_35B_MTP_MODEL QWEN_SESSION_TOKEN_LIMIT
+    LLAMA_CTX_SIZE LLAMA_35B_CTX_SIZE LLAMA_TEMP LLAMA_TOP_P LLAMA_TOP_K LLAMA_GPU_LAYERS
+    LLAMA_REASONING_FORMAT LLAMA_CACHE_TYPE_K LLAMA_CACHE_TYPE_V
+    LLAMA_CTX_CHECKPOINTS LLAMA_CHECKPOINT_EVERY_N_TOKENS LLAMA_SWA_FULL
+    LLAMA_MTP LLAMA_MTP_N_MAX_27B LLAMA_MTP_N_MAX_35B LLAMA_PRESERVE_THINKING
+    AI_LOCAL_FORCE_THINK LLAMA_PROXY_FORCE_THINK
+    AI_LOCAL_NOTHINK_TEMP AI_LOCAL_NOTHINK_TOP_P AI_LOCAL_THINK_TEMP AI_LOCAL_THINK_TOP_P
+    AI_LOCAL_WARP_CTX_SOFT_LIMIT PROXY_TIMEOUT SERVICE_STARTUP_WAIT
+    AI_LOCAL_SINGLE_MODEL_MODE AI_LOCAL_STATE_DIR AI_LOCAL_LOG_DIR AI_LOCAL_RUN_DIR
+)
+
 # ---- Port defaults ----
 LLAMA_PORT="${LLAMA_PORT:-8080}"              # 27B llama-server
 LLAMA_35B_PORT="${LLAMA_35B_PORT:-8083}"       # 35B llama-server
 LLAMA_PROXY_PORT="${LLAMA_PROXY_PORT:-8081}"   # 27B no-think proxy
 PROXY_35B_PORT="${PROXY_35B_PORT:-11435}"      # 35B no-think proxy
 ROUTER_PORT="${ROUTER_PORT:-8090}"
-MLX_PORT="${MLX_PORT:-8082}"                   # optional MLX backend (27B)
-MLX_PORT_35B="${MLX_PORT_35B:-8084}"            # optional MLX backend (35B)
-# Backward-compat alias for the 35B proxy port.
-OLLAMA_PROXY_PORT="${OLLAMA_PROXY_PORT:-$PROXY_35B_PORT}"
-
-# ---- Backend selection (llama | mlx) ----
-BACKEND_27B="${BACKEND_27B:-llama}"
-BACKEND_35B="${BACKEND_35B:-llama}"
 
 # ---- Model defaults ----
 QWEN_27B_MODEL="${QWEN_27B_MODEL:-$HOME/.local/share/llama-models/Qwen3.6-27B-UD-Q4_K_XL.gguf}"
 QWEN_27B_MTP_MODEL="${QWEN_27B_MTP_MODEL:-$HOME/.local/share/llama-models/mtp/Qwen3.6-27B-UD-Q4_K_XL.gguf}"
 QWEN_35B_MODEL="${QWEN_35B_MODEL:-$HOME/.local/share/llama-models/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf}"
 QWEN_35B_MTP_MODEL="${QWEN_35B_MTP_MODEL:-$HOME/.local/share/llama-models/mtp/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf}"
-QWEN_27B_MLX_MODEL="${QWEN_27B_MLX_MODEL:-mlx-community/Qwen3.6-27B-4bit}"
-QWEN_35B_MLX_MODEL="${QWEN_35B_MLX_MODEL:-mlx-community/Qwen3.6-35B-A3B-4bit-DWQ}"
 QWEN_SESSION_TOKEN_LIMIT="${QWEN_SESSION_TOKEN_LIMIT:-32000}"
 
 # ---- llama.cpp parameter defaults (shared by 27B and 35B unless overridden) ----
@@ -47,15 +53,14 @@ LLAMA_CACHE_TYPE_V="${LLAMA_CACHE_TYPE_V:-q8_0}"
 LLAMA_CTX_CHECKPOINTS="${LLAMA_CTX_CHECKPOINTS:-128}"
 LLAMA_CHECKPOINT_EVERY_N_TOKENS="${LLAMA_CHECKPOINT_EVERY_N_TOKENS:-4096}"
 LLAMA_SWA_FULL="${LLAMA_SWA_FULL:-1}"
+# On by default: MTP speculative decoding gives a real decode speedup on
+# Apple Silicon/Metal (measured +42% on the 27B dense, +23% on the 35B-A3B MoE;
+# see bench/README.md). Disable with LLAMA_MTP=0 to drop --spec-type and skip the
+# MTP draft context (saves a little RAM).
 LLAMA_MTP="${LLAMA_MTP:-1}"
 LLAMA_MTP_N_MAX_27B="${LLAMA_MTP_N_MAX_27B:-3}"
 LLAMA_MTP_N_MAX_35B="${LLAMA_MTP_N_MAX_35B:-2}"
 LLAMA_PRESERVE_THINKING="${LLAMA_PRESERVE_THINKING:-1}"
-
-# ---- MLX server tuning ----
-MLX_TEMP="${MLX_TEMP:-0.6}"
-MLX_TOP_P="${MLX_TOP_P:-0.95}"
-MLX_TOP_K="${MLX_TOP_K:-20}"
 
 # ---- Thinking control defaults ----
 AI_LOCAL_FORCE_THINK="${AI_LOCAL_FORCE_THINK:-0}"
@@ -64,9 +69,8 @@ AI_LOCAL_NOTHINK_TOP_P="${AI_LOCAL_NOTHINK_TOP_P:-0.95}"
 AI_LOCAL_THINK_TEMP="${AI_LOCAL_THINK_TEMP:-1.0}"
 AI_LOCAL_THINK_TOP_P="${AI_LOCAL_THINK_TOP_P:-0.95}"
 AI_LOCAL_WARP_CTX_SOFT_LIMIT="${AI_LOCAL_WARP_CTX_SOFT_LIMIT:-28000}"
+# Legacy alias still honored alongside the canonical AI_LOCAL_FORCE_THINK.
 LLAMA_PROXY_FORCE_THINK="${LLAMA_PROXY_FORCE_THINK:-$AI_LOCAL_FORCE_THINK}"
-OLLAMA_PROXY_FORCE_THINK="${OLLAMA_PROXY_FORCE_THINK:-$AI_LOCAL_FORCE_THINK}"
-OLLAMA_PROXY_THINK="${OLLAMA_PROXY_THINK:-$AI_LOCAL_FORCE_THINK}"
 
 # ---- Service timeouts ----
 PROXY_TIMEOUT="${PROXY_TIMEOUT:-600}"
@@ -81,6 +85,28 @@ AI_LOCAL_LOG_DIR="${AI_LOCAL_LOG_DIR:-$AI_LOCAL_STATE_DIR/logs}"
 AI_LOCAL_RUN_DIR="${AI_LOCAL_RUN_DIR:-$AI_LOCAL_STATE_DIR/run}"
 
 load_qwen_config() {
+    # Config files use direct assignment (VAR=value), which would clobber any
+    # ad-hoc env override like `LLAMA_MTP=1 ai-local 35b`. Snapshot the config
+    # vars that are already set in the environment BEFORE sourcing the conf
+    # files, then restore them afterward so env overrides take precedence.
+    #
+    # Snapshots use indirection (${!var}) + eval for restore, so this works on
+    # bash 3.2 (macOS default) with no associative arrays or namerefs. Defaults
+    # to $AI_LOCAL_CONFIG_VARS unless callers pass an explicit var list.
+    local -a _var_names=("${@:-${AI_LOCAL_CONFIG_VARS[@]}}")
+    local -a _env_names=()
+    local _saved_name _saved_val
+    for _saved_name in "${_var_names[@]}"; do
+        # Capture only if the var is present in the environment (inherited/exported).
+        if [[ -n "${!_saved_name+set}" ]]; then
+            _saved_val="${!_saved_name}"
+            _env_names+=("$_saved_name")
+            # Stash the value in a uniquely-named var for restore. Use printf %q
+            # to safely quote the value so eval restores it verbatim.
+            printf -v "_env_val_$_saved_name" '%s' "$_saved_val"
+        fi
+    done
+
     if [[ -f "$QWEN_LOCAL_CONF" ]]; then
         # shellcheck disable=SC1090
         source "$QWEN_LOCAL_CONF"
@@ -89,6 +115,13 @@ load_qwen_config() {
         # shellcheck disable=SC1090
         source "$QWEN_LOCAL_CONF_LOCAL"
     fi
+
+    # Re-apply env-inherited values so they win over conf defaults.
+    for _saved_name in "${_env_names[@]:-}"; do
+        [[ -n "$_saved_name" ]] || continue
+        eval "$_saved_name=\"\${_env_val_$_saved_name}\""
+        unset "_env_val_$_saved_name"
+    done
 }
 
 ensure_state_dirs() {
@@ -137,15 +170,6 @@ show_config() {
     echo "QWEN_27B_MTP_MODEL=${QWEN_27B_MTP_MODEL}"
     echo "QWEN_35B_MODEL=${QWEN_35B_MODEL}"
     echo "QWEN_35B_MTP_MODEL=${QWEN_35B_MTP_MODEL}"
-    echo "QWEN_27B_MLX_MODEL=${QWEN_27B_MLX_MODEL}"
-    echo "QWEN_35B_MLX_MODEL=${QWEN_35B_MLX_MODEL}"
-    echo "BACKEND_27B=${BACKEND_27B}"
-    echo "BACKEND_35B=${BACKEND_35B}"
-    echo "MLX_PORT=${MLX_PORT}"
-    echo "MLX_PORT_35B=${MLX_PORT_35B}"
-    echo "MLX_TEMP=${MLX_TEMP}"
-    echo "MLX_TOP_P=${MLX_TOP_P}"
-    echo "MLX_TOP_K=${MLX_TOP_K}"
     echo "QWEN_SESSION_TOKEN_LIMIT=${QWEN_SESSION_TOKEN_LIMIT}"
     echo "LLAMA_CTX_SIZE=${LLAMA_CTX_SIZE}"
     echo "LLAMA_35B_CTX_SIZE=${LLAMA_35B_CTX_SIZE}"

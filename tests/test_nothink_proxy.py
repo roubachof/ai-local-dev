@@ -36,7 +36,6 @@ def test_apply_sampling_defaults_uses_mode_specific_defaults():
     original = nothink_proxy.CONFIG
     try:
         nothink_proxy.CONFIG = nothink_proxy.ProxyConfig(
-            mode="llama",
             upstream_url="http://127.0.0.1:8080",
             timeout_s=600.0,
             force_think=False,
@@ -82,7 +81,6 @@ def test_maybe_log_context_pressure_logs_warning(monkeypatch):
 
     try:
         nothink_proxy.CONFIG = nothink_proxy.ProxyConfig(
-            mode="ollama",
             upstream_url="http://127.0.0.1:11434",
             timeout_s=600.0,
             force_think=False,
@@ -117,7 +115,6 @@ def test_maybe_log_context_pressure_skips_when_below_limit(monkeypatch):
 
     try:
         nothink_proxy.CONFIG = nothink_proxy.ProxyConfig(
-            mode="ollama",
             upstream_url="http://127.0.0.1:11434",
             timeout_s=600.0,
             force_think=False,

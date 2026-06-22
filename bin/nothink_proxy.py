@@ -25,7 +25,6 @@ log = logging.getLogger("nothink-proxy")
 
 @dataclass
 class ProxyConfig:
-    mode: str
     upstream_url: str
     timeout_s: float
     force_think: bool
@@ -36,12 +35,7 @@ class ProxyConfig:
     warp_ctx_soft_limit: int
 
 
-def default_upstream(mode: str) -> str:
-    if mode == "ollama":
-        return "http://127.0.0.1:11434"
-    if mode == "mlx":
-        return "http://127.0.0.1:8082"
-    return "http://127.0.0.1:8080"
+DEFAULT_UPSTREAM_URL = "http://127.0.0.1:8080"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -64,12 +58,10 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-MODE = os.environ.get("AI_LOCAL_PROXY_MODE", "llama")
 CONFIG = ProxyConfig(
-    mode=MODE,
-    upstream_url=os.environ.get("UPSTREAM_URL", default_upstream(MODE)),
+    upstream_url=os.environ.get("UPSTREAM_URL", DEFAULT_UPSTREAM_URL),
     timeout_s=_env_float("PROXY_TIMEOUT", 600.0),
-    force_think=resolve_force_think(MODE),
+    force_think=resolve_force_think(),
     nothink_temp=_env_float("AI_LOCAL_NOTHINK_TEMP", 0.6),
     nothink_top_p=_env_float("AI_LOCAL_NOTHINK_TOP_P", 0.95),
     think_temp=_env_float("AI_LOCAL_THINK_TEMP", 1.0),
@@ -82,7 +74,6 @@ def json_log(event: str, **fields: Any) -> None:
     payload = {
         "ts": datetime.now(UTC).isoformat(),
         "event": event,
-        "mode": CONFIG.mode,
         "upstream": CONFIG.upstream_url,
     }
     payload.update(fields)
@@ -221,7 +212,7 @@ async def chat_completions(request: Request) -> Response:
     if not isinstance(body, dict):
         return JSONResponse({"error": "chat body must be a JSON object"}, status_code=400)
 
-    apply_disable_fields(body, force_think=CONFIG.force_think, mode=CONFIG.mode)
+    apply_disable_fields(body, force_think=CONFIG.force_think)
     apply_sampling_defaults(body, force_think=CONFIG.force_think)
     is_stream = bool(body.get("stream"))
 
@@ -405,8 +396,7 @@ async def passthrough(full_path: str, request: Request) -> Response:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Unified nothink proxy for ai-local-dev.")
-    parser.add_argument("--mode", choices=["llama", "ollama", "mlx"], default=CONFIG.mode)
-    parser.add_argument("--port", type=int, default=None, help="Listen port. Defaults to 8081 (llama) or 11435 (ollama).")
+    parser.add_argument("--port", type=int, default=8081, help="Listen port (default 8081).")
     parser.add_argument("--upstream-url", default=None, help="Upstream base URL.")
     return parser.parse_args(argv)
 
@@ -416,14 +406,12 @@ def main(argv: list[str] | None = None) -> int:
     global CONFIG  # noqa: PLW0603
 
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    mode = args.mode
-    upstream = args.upstream_url or CONFIG.upstream_url or default_upstream(mode)
-    port = args.port if args.port is not None else (11435 if mode == "ollama" else 8081)
+    upstream = args.upstream_url or CONFIG.upstream_url or DEFAULT_UPSTREAM_URL
+    port = args.port
     CONFIG = ProxyConfig(
-        mode=mode,
         upstream_url=upstream,
         timeout_s=_env_float("PROXY_TIMEOUT", 600.0),
-        force_think=resolve_force_think(mode),
+        force_think=resolve_force_think(),
         nothink_temp=_env_float("AI_LOCAL_NOTHINK_TEMP", 0.6),
         nothink_top_p=_env_float("AI_LOCAL_NOTHINK_TOP_P", 0.95),
         think_temp=_env_float("AI_LOCAL_THINK_TEMP", 1.0),

@@ -8,7 +8,6 @@ For `POST /v1/chat/completions`, the unified proxy applies:
 
 - `chat_template_kwargs.enable_thinking=false` (Qwen template-level switch, used by llama.cpp)
 - `enable_thinking=false` (legacy fallback key)
-- `think=false` and `reasoning_effort=none` (defense-in-depth for Ollama)
 
 The proxy also strips `<think>...</think>` blocks from response `content` in both JSON and SSE streaming responses when thinking is disabled.
 
@@ -20,11 +19,9 @@ AI_LOCAL_FORCE_THINK=1 ai-local 27b
 AI_LOCAL_FORCE_THINK=1 ai-local 35b
 ```
 
-Legacy aliases are still supported:
+Legacy alias still supported:
 
 - `LLAMA_PROXY_FORCE_THINK=1`
-- `OLLAMA_PROXY_FORCE_THINK=1`
-- `OLLAMA_PROXY_THINK=1`
 
 ## preserve_thinking and checkpoint cache
 When thinking is on, llama-server is started with `--chat-template-kwargs {"preserve_thinking": true}` (controlled by `LLAMA_PRESERVE_THINKING=1`, default on). This keeps reasoning in the conversation history so the hybrid-cache checkpoint (`--ctx-checkpoints`) can reuse prefixes across turns. Without `preserve_thinking`, the chat template strips reasoning from history on each turn and the prefix changes every turn — the checkpoint then can't be reused and every turn re-prefills the full context.
