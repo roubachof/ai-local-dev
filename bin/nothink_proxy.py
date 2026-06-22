@@ -17,7 +17,13 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from _nothink import SseThinkFilter, apply_disable_fields, resolve_force_think, strip_think_blocks
+from _nothink import (
+    SseThinkFilter,
+    apply_disable_fields,
+    resolve_force_think,
+    resolve_force_think_header,
+    strip_think_blocks,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("nothink-proxy")
@@ -212,8 +218,13 @@ async def chat_completions(request: Request) -> Response:
     if not isinstance(body, dict):
         return JSONResponse({"error": "chat body must be a JSON object"}, status_code=400)
 
-    apply_disable_fields(body, force_think=CONFIG.force_think)
-    apply_sampling_defaults(body, force_think=CONFIG.force_think)
+    # Per-request force-think override from header (router sets this per-route)
+    header_val = request.headers.get("X-AI-Local-Force-Think")
+    force_think_override = resolve_force_think_header(header_val)
+    force_think = force_think_override if force_think_override is not None else CONFIG.force_think
+
+    apply_disable_fields(body, force_think=force_think)
+    apply_sampling_defaults(body, force_think=force_think)
     is_stream = bool(body.get("stream"))
 
     json_log(
@@ -222,11 +233,13 @@ async def chat_completions(request: Request) -> Response:
         path="/v1/chat/completions",
         stream=is_stream,
         model=body.get("model"),
-        force_think=CONFIG.force_think,
+        force_think=force_think,
     )
 
     client: httpx.AsyncClient = app.state.client
     upstream_headers = build_upstream_headers(request)
+    # Strip the per-request header so upstream never sees it
+    upstream_headers.pop("X-AI-Local-Force-Think", None)
     if not is_stream:
         try:
             upstream = await client.post(
@@ -258,7 +271,7 @@ async def chat_completions(request: Request) -> Response:
             )
 
         payload = upstream.json()
-        if not CONFIG.force_think:
+        if not force_think:
             patch_chat_response(payload)
         usage = usage_from_payload(payload)
         json_log(
@@ -319,7 +332,7 @@ async def chat_completions(request: Request) -> Response:
                         yield line + "\n\n"
                         continue
 
-                    if not CONFIG.force_think:
+                    if not force_think:
                         patch_stream_payload(obj, filters)
                     stream_usage = usage_from_payload(obj)
                     for key, value in stream_usage.items():

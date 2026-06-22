@@ -16,6 +16,29 @@ def resolve_force_think() -> bool:
     return False
 
 
+# HTTP header clients (or the model router) set to override the launch-time
+# force-think default for a single request. Used by the router to enable
+# thinking on the planner (reasoning) route while keeping the coder route
+# no-think, without running two proxy instances.
+FORCE_THINK_HEADER = "X-AI-Local-Force-Think"
+
+
+def resolve_force_think_header(header_value: str | None) -> bool | None:
+    """Resolve a per-request force-think override from the header value.
+
+    Returns True when the header is "1" (force thinking on), False when "0"
+    (force no-think), and None when absent/empty so the caller falls back to the
+    launch-time default. Any other value is treated as None (no override).
+    """
+    if header_value is None or header_value == "":
+        return None
+    if header_value == "1":
+        return True
+    if header_value == "0":
+        return False
+    return None
+
+
 def apply_disable_fields(body: dict, force_think: bool) -> None:
     """Apply disable-thinking request fields in-place."""
     if force_think or not isinstance(body, dict):

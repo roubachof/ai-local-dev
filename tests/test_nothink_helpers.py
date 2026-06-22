@@ -9,7 +9,13 @@ BIN_DIR = pathlib.Path(__file__).resolve().parents[1] / "bin"
 if str(BIN_DIR) not in sys.path:
     sys.path.insert(0, str(BIN_DIR))
 
-from _nothink import SseThinkFilter, apply_disable_fields, resolve_force_think, strip_think_blocks  # noqa: E402
+from _nothink import (  # noqa: E402
+    SseThinkFilter,
+    apply_disable_fields,
+    resolve_force_think,
+    resolve_force_think_header,
+    strip_think_blocks,
+)
 
 
 def test_apply_disable_fields_defaults():
@@ -60,3 +66,28 @@ def test_resolve_force_think_legacy_alias(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("AI_LOCAL_FORCE_THINK", raising=False)
     monkeypatch.setenv("LLAMA_PROXY_FORCE_THINK", "1")
     assert resolve_force_think() is True
+
+
+# --- resolve_force_think_header ---
+
+def test_resolve_force_think_header_one_means_on():
+    assert resolve_force_think_header("1") is True
+
+
+def test_resolve_force_think_header_zero_means_off():
+    assert resolve_force_think_header("0") is False
+
+
+def test_resolve_force_think_header_absent_is_none():
+    assert resolve_force_think_header(None) is None
+
+
+def test_resolve_force_think_header_empty_is_none():
+    assert resolve_force_think_header("") is None
+
+
+def test_resolve_force_think_header_garbage_is_none():
+    # Any value other than "1"/"0" is treated as no override so the caller
+    # falls back to the launch-time default.
+    assert resolve_force_think_header("true") is None
+    assert resolve_force_think_header("yes") is None

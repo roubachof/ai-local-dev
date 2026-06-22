@@ -34,25 +34,49 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-def choose_target(model_name: str | None) -> str:
+# Per-route force-think header injected into the downstream proxy request.
+# The planner (reasoning) route runs with thinking on; the coder route runs
+# no-think for speed. The default route sends no header so the proxy falls
+# back to its launch-time AI_LOCAL_FORCE_THINK default.
+FORCE_THINK_HEADER = "X-AI-Local-Force-Think"
+
+PLANNER_MODELS = {"planner", "plan", "qwen-planner", "local-27b", "qwen3.6-27b"}
+CODER_MODELS = {"coder", "code", "qwen-coder", "local-35b", "qwen3.6-35b"}
+
+
+def resolve_route(model_name: str | None) -> str:
+    """Map a request model name to a route: "planner", "coder", or "default"."""
     if not model_name:
-        return DEFAULT_URL
+        return "default"
     lowered = model_name.lower()
-    if lowered in {"planner", "plan", "qwen-planner", "local-27b", "qwen3.6-27b"}:
+    if lowered in PLANNER_MODELS:
+        return "planner"
+    if lowered in CODER_MODELS:
+        return "coder"
+    return "default"
+
+
+def target_for_route(route: str) -> str:
+    if route == "planner":
         return ARGS.planner_url
-    if lowered in {
-        "coder",
-        "code",
-        "qwen-coder",
-        "local-35b",
-        "qwen3.6-35b",
-    }:
+    if route == "coder":
         return ARGS.coder_url
     return DEFAULT_URL
 
 
+def force_think_header_for_route(route: str) -> str | None:
+    """Per-route force-think override value, or None to use the proxy default."""
+    if route == "planner":
+        return "1"
+    if route == "coder":
+        return "0"
+    return None
+
+
 def upstream_headers(request: Request, body_len: int | None = None) -> dict[str, str]:
-    skip = {"host", "content-length", "connection", "authorization"}
+    # Strip the force-think header: the router owns the per-route thinking
+    # decision and re-injects it explicitly below.
+    skip = {"host", "content-length", "connection", "authorization", "x-ai-local-force-think"}
     headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
     if body_len is not None:
         headers["Content-Length"] = str(body_len)
@@ -73,10 +97,14 @@ async def route_chat(request: Request):
     if not isinstance(body, dict):
         return JSONResponse({"error": "chat body must be a JSON object"}, status_code=400)
 
-    target = choose_target(body.get("model"))
+    route = resolve_route(body.get("model"))
+    target = target_for_route(route)
     is_stream = bool(body.get("stream"))
     client: httpx.AsyncClient = app.state.client
     headers = upstream_headers(request)
+    force_think_header = force_think_header_for_route(route)
+    if force_think_header is not None:
+        headers[FORCE_THINK_HEADER] = force_think_header
 
     if not is_stream:
         try:
