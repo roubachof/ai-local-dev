@@ -12,12 +12,23 @@ For `POST /v1/chat/completions`, the unified proxy applies:
 The proxy also strips `<think>...</think>` blocks from response `content` in both JSON and SSE streaming responses when thinking is disabled.
 
 ## Enable thinking
-Canonical switch:
+Shortcut commands (export `AI_LOCAL_FORCE_THINK=1` for you before config load):
+
+```bash
+ai-local 35b-thinking   # 35B stack with thinking on
+ai-local 27b-thinking   # 27B stack with thinking on
+ai-local restart 35b-thinking
+ai-local restart 27b-thinking
+```
+
+Canonical env switch (equivalent):
 
 ```bash
 AI_LOCAL_FORCE_THINK=1 ai-local 27b
 AI_LOCAL_FORCE_THINK=1 ai-local 35b
 ```
+
+Plain `ai-local 35b` / `27b` reset to no-think (the override does not leak across launches).
 
 Legacy alias still supported:
 

@@ -20,8 +20,10 @@ ai-local download 27b       # 27B non-MTP GGUF (optional fallback)
 ai-local download 35b       # 35B-A3B + MTP, 128k ctx (recommended)
 
 # Start stacks
-ai-local 27b          # llama.cpp + checkpoint + MTP (on by default)
-ai-local 35b          # llama.cpp + checkpoint + MTP, 128k ctx
+ai-local 27b          # llama.cpp + checkpoint + MTP (on by default, no-think)
+ai-local 27b-thinking # same stack with thinking on
+ai-local 35b          # llama.cpp + checkpoint + MTP, 128k ctx (no-think)
+ai-local 35b-thinking # same stack with thinking on (recommended for reasoning/design)
 ```
 
 ---
@@ -44,7 +46,7 @@ ai-local 35b          # llama.cpp + checkpoint + MTP, 128k ctx
 - `--swa-full` for bounded KV on sliding-window attention layers (memory-efficient long context)
 - `--chat-template-kwargs preserve_thinking=true` to keep reasoning in history for checkpoint prefix reuse
 - Stable 27B endpoint (`http://127.0.0.1:8081/v1`) and 35B endpoint (`http://127.0.0.1:11435/v1`)
-- Thinking disabled by default with force-think override (`AI_LOCAL_FORCE_THINK=1`)
+- Thinking disabled by default; enable per-launch with `ai-local 35b-thinking` / `27b-thinking` (or `AI_LOCAL_FORCE_THINK=1`)
 - Persistent logs and PID files under `~/.local/state/ai-local/`
 - Commands for restart, logs, download, and doctor checks
 

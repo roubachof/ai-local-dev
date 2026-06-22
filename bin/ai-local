@@ -16,6 +16,23 @@ if [[ ! -f "$AI_LOCAL_DEV_DIR/config/.qwen-local.conf" ]] && \
     AI_LOCAL_DEV_DIR="$HOME/.local/share/ai-local-dev"
 fi
 
+# Pre-parse for the *-thinking command shortcuts. These export the force-think
+# override BEFORE load_qwen_config() snapshots env vars, so the snapshot/restore
+# logic in lib/qwen-config.sh preserves the override (env wins over conf).
+#   ai-local 35b-thinking  / 27b-thinking          -> start stack, thinking on
+#   ai-local restart 35b-thinking / 27b-thinking    -> restart stack, thinking on
+_ai_local_cmd="${1:-}"
+_ai_local_sub="${2:-}"
+if [[ "$_ai_local_cmd" == "35b-thinking" || "$_ai_local_cmd" == "27b-thinking" ]]; then
+    export AI_LOCAL_FORCE_THINK=1
+    export LLAMA_PROXY_FORCE_THINK=1
+elif [[ "$_ai_local_cmd" == "restart" \
+    && ( "$_ai_local_sub" == "35b-thinking" || "$_ai_local_sub" == "27b-thinking" ) ]]; then
+    export AI_LOCAL_FORCE_THINK=1
+    export LLAMA_PROXY_FORCE_THINK=1
+fi
+unset _ai_local_cmd _ai_local_sub
+
 # shellcheck disable=SC1091
 source "$AI_LOCAL_DEV_DIR/lib/qwen-config.sh"
 load_qwen_config
@@ -544,9 +561,9 @@ doctor() {
 restart_stack() {
     local target=$1
     case "$target" in
-        27b)            stop_27b; start_27b_stack ;;
-        35b|35b-llama)  stop_35b; start_35b_stack ;;
-        *)              log_error "Usage: ai-local restart [27b|35b]" ;;
+        27b|27b-thinking)    stop_27b; start_27b_stack ;;
+        35b|35b-llama|35b-thinking)  stop_35b; start_35b_stack ;;
+        *)              log_error "Usage: ai-local restart [27b|35b] (or *-thinking)" ;;
     esac
 }
 
@@ -555,9 +572,11 @@ usage() {
 ai-local — Local AI Orchestrator
 
 Usage:
-  ai-local 27b                   Start 27B stack (llama.cpp + checkpoint)
-  ai-local 35b                   Start 35B stack (llama.cpp + checkpoint, 128k ctx)
-  ai-local restart [27b|35b]
+  ai-local 27b                   Start 27B stack (llama.cpp + checkpoint, no-think)
+  ai-local 27b-thinking          Start 27B stack with thinking on
+  ai-local 35b                   Start 35B stack (llama.cpp + checkpoint, 128k ctx, no-think)
+  ai-local 35b-thinking          Start 35B stack with thinking on
+  ai-local restart [27b|35b]     Restart stack (also: 27b-thinking, 35b-thinking)
   ai-local stop [27b|35b|all]    Stop selected stack (or all by default)
   ai-local status                Show service status
   ai-local logs <service>        Tail logs (27b, llama, 35b, 35b-llama, router)
@@ -582,13 +601,10 @@ COMMAND="${1:-}"
 SUBCOMMAND="${2:-}"
 
 case "$COMMAND" in
-    27b)
+    27b|27b-thinking)
         start_27b_stack
         ;;
-    35b)
-        start_35b_stack
-        ;;
-    35b-llama)
+    35b|35b-llama|35b-thinking)
         start_35b_stack
         ;;
     restart)
