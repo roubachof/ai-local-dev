@@ -1,0 +1,27 @@
+{
+  "rubric": "Correctness(0-3) + Completeness(0-2) + Clarity(0-2) = 0-7. Scored blind from quality_blind.md only.",
+  "notes": "Capped responses (finish=length) are penalized in Completeness when the answer is cut mid-derivation; Correctness still credited for the reasoning shown. Scored before unblinding.",
+  "scores": {
+    "dbg1": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 3, "completeness": 2, "clarity": 2}},
+    "dbg2": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 3, "completeness": 2, "clarity": 2}},
+    "dbg3": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 3, "completeness": 2, "clarity": 2}},
+    "imp1": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 2, "completeness": 2, "clarity": 2}},
+    "imp2": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 3, "completeness": 2, "clarity": 2}},
+    "imp3": {"A": {"correctness": 1, "completeness": 1, "clarity": 2}, "B": {"correctness": 2, "completeness": 2, "clarity": 2}},
+    "des1": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 2, "completeness": 2, "clarity": 2}},
+    "des2": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 3, "completeness": 2, "clarity": 2}},
+    "des3": {"A": {"correctness": 3, "completeness": 1, "clarity": 2}, "B": {"correctness": 3, "completeness": 1, "clarity": 2}},
+    "rea1": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 3, "completeness": 2, "clarity": 2}},
+    "rea2": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 3, "completeness": 2, "clarity": 2}},
+    "rea3": {"A": {"correctness": 3, "completeness": 1, "clarity": 2}, "B": {"correctness": 3, "completeness": 1, "clarity": 2}},
+    "mat1": {"A": {"correctness": 2, "completeness": 1, "clarity": 2}, "B": {"correctness": 2, "completeness": 1, "clarity": 2}},
+    "mat2": {"A": {"correctness": 3, "completeness": 1, "clarity": 2}, "B": {"correctness": 2, "completeness": 1, "clarity": 2}},
+    "mat3": {"A": {"correctness": 2, "completeness": 1, "clarity": 2}, "B": {"correctness": 2, "completeness": 1, "clarity": 2}},
+    "exp1": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 3, "completeness": 2, "clarity": 2}},
+    "exp2": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 2, "completeness": 1, "clarity": 2}},
+    "exp3": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 3, "completeness": 1, "clarity": 2}},
+    "wri1": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 2, "completeness": 2, "clarity": 2}},
+    "wri2": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 3, "completeness": 2, "clarity": 2}},
+    "wri3": {"A": {"correctness": 3, "completeness": 2, "clarity": 2}, "B": {"correctness": 3, "completeness": 1, "clarity": 2}}
+  }
+}

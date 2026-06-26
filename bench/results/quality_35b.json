@@ -1,0 +1,237 @@
+{
+  "label": "35b",
+  "url": "http://127.0.0.1:11435/v1",
+  "results": [
+    {
+      "id": "dbg1",
+      "category": "debug",
+      "prompt": "Find the bug in this Python function and give the fix in one sentence plus corrected code:\n\n```python\ndef merge_sorted(a, b):\n    result = []\n    i = j = 0\n    while i < len(a) and j < len(b):\n        if a[i] < b[j]:\n            result.append(a[i]); i += 1\n        else:\n            result.append(b[j]); j += 1\n    return result\n```",
+      "max_tokens": 600,
+      "response": "The bug is that the function fails to append the remaining elements from either list `a` or `b` after the main loop ends.\n\n```python\ndef merge_sorted(a, b):\n    result = []\n    i = j = 0\n    while i < len(a) and j < len(b):\n        if a[i] < b[j]:\n            result.append(a[i]); i += 1\n        else:\n            result.append(b[j]); j += 1\n    return result + a[i:] + b[j:]\n```",
+      "finish_reason": "stop",
+      "wall_s": 1.69,
+      "completion_tokens": 117,
+      "prompt_tokens": 110
+    },
+    {
+      "id": "dbg2",
+      "category": "debug",
+      "prompt": "What is wrong with this SQL, and how would you fix it? One sentence + corrected SQL.\n\n```sql\nSELECT users.name, COUNT(orders.id)\nFROM users\nWHERE orders.user_id = users.id\nGROUP BY users.name\nORDER BY COUNT(orders.id) DESC\n```",
+      "max_tokens": 600,
+      "response": "The query is invalid because it uses a `WHERE` clause referencing the `orders` table, which is not included in the `FROM` clause, and it should use a `JOIN` to link the tables; here is the corrected SQL:\n\n```sql\nSELECT users.name, COUNT(orders.id)\nFROM users\nJOIN orders ON orders.user_id = users.id\nGROUP BY users.name\nORDER BY COUNT(orders.id) DESC\n```",
+      "finish_reason": "stop",
+      "wall_s": 1.63,
+      "completion_tokens": 92,
+      "prompt_tokens": 72
+    },
+    {
+      "id": "dbg3",
+      "category": "debug",
+      "prompt": "This async Python code occasionally loses tasks. Find the bug and give the fix in one sentence plus code.\n\n```python\nimport asyncio\nasync def process(items):\n    results = []\n    for x in items:\n        asyncio.create_task(handle(x))\n    return results\n```",
+      "max_tokens": 600,
+      "response": "The bug is that `asyncio.create_task` is called in a sync context without awaiting or collecting the tasks, so they are immediately garbage-collected and never run; the fix is to collect the tasks in a list and await them all:\n\n```python\nimport asyncio\nasync def process(items):\n    results = []\n    tasks = [asyncio.create_task(handle(x)) for x in items]\n    results = await asyncio.gather(*tasks)\n    return results\n```",
+      "finish_reason": "stop",
+      "wall_s": 1.54,
+      "completion_tokens": 101,
+      "prompt_tokens": 71
+    },
+    {
+      "id": "imp1",
+      "category": "impl",
+      "prompt": "Write a Python `debounce` decorator like lodash's debounce: the returned function delays execution until `wait` seconds after the last call, and only the last call's args are used. Type hints, <25 lines.",
+      "max_tokens": 700,
+      "response": "```python\nfrom typing import Callable, Any\nimport time\nimport threading\n\n\ndef debounce(wait: float) -> Callable[[Callable[..., Any]], Callable[..., Any]]:\n    \"\"\"Lodash-style debounce decorator.\"\"\"\n    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:\n        timer: threading.Timer | None = None\n        last_args: list[Any] = []\n        last_kwargs: dict[str, Any] = {}\n\n        def wrapper(*args: Any, **kwargs: Any) -> None:\n            nonlocal timer, last_args, last_kwargs\n            last_args, last_kwargs = args, kwargs\n            if timer is not None:\n                timer.cancel()\n            timer = threading.Timer(wait, func, args=args, kwargs=kwargs)\n            timer.start()\n\n        wrapper.cancel = lambda: timer and timer.cancel()  # type: ignore[attr-defined]\n        return wrapper\n    return decorator\n```",
+      "finish_reason": "stop",
+      "wall_s": 2.68,
+      "completion_tokens": 195,
+      "prompt_tokens": 58
+    },
+    {
+      "id": "imp2",
+      "category": "impl",
+      "prompt": "Implement a Python class `RateLimiter` with a token-bucket algorithm: `allow(n=1)` returns True if n tokens are available (refilling at `rate` tokens/sec up to `capacity`). Type hints, <30 lines.",
+      "max_tokens": 700,
+      "response": "```python\nimport time\n\nclass RateLimiter:\n    def __init__(self, rate: float, capacity: float):\n        self.rate = rate\n        self.capacity = capacity\n        self.tokens = capacity\n        self.last_refill = time.monotonic()\n\n    def _refill(self) -> None:\n        now = time.monotonic()\n        elapsed = now - self.last_refill\n        self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)\n        self.last_refill = now\n\n    def allow(self, n: int = 1) -> bool:\n        self._refill()\n        if self.tokens >= n:\n            self.tokens -= n\n            return True\n        return False\n```",
+      "finish_reason": "stop",
+      "wall_s": 2.06,
+      "completion_tokens": 160,
+      "prompt_tokens": 63
+    },
+    {
+      "id": "imp3",
+      "category": "impl",
+      "prompt": "Write a Python function `flatten(obj)` that deep-flattens nested lists/tuples of arbitrary depth into a flat list, but yields dict values in place (does not recurse into dicts). Handle strings as atoms, not iterables. <20 lines.",
+      "max_tokens": 700,
+      "response": "```python\ndef flatten(obj):\n    if isinstance(obj, (dict, str)):\n        yield obj\n    elif isinstance(obj, (list, tuple)):\n        for item in obj:\n            yield from flatten(item)\n    else:\n        yield obj\n```",
+      "finish_reason": "stop",
+      "wall_s": 0.93,
+      "completion_tokens": 58,
+      "prompt_tokens": 64
+    },
+    {
+      "id": "des1",
+      "category": "design",
+      "prompt": "In Python, when should you use asyncio vs threading? One concrete example of each and the main tradeoff in one line.",
+      "max_tokens": 700,
+      "response": "Use **asyncio** when you have many concurrent I/O-bound tasks (like network requests) that spend most of their time waiting for external responses, as it uses a single thread with an event loop to handle concurrency efficiently without the overhead of context switching.\n\nUse **threading** when you have a moderate number of I/O-bound tasks or when you need to parallelize CPU-bound tasks (using `concurrent.futures.ThreadPoolExecutor` for I/O or `multiprocessing` for CPU), especially if you are integrating with synchronous libraries that don’t support `await`.\n\n---\n\n### Concrete Example: Asyncio\n\n**Scenario:** Fetching 100 web pages concurrently.\n\n```python\nimport asyncio\nimport aiohttp\n\nasync def fetch(session, url):\n    async with session.get(url) as response:\n        return await response.text()\n\nasync def main():\n    urls = [f\"https://example.com/page{i}\" for i in range(100)]\n    async with aiohttp.ClientSession() as session:\n        tasks = [fetch(session, url) for url in urls]\n        results = await asyncio.gather(*tasks)  # Non-blocking parallel execution\n    return results\n\n# Run the async event loop\nloop = asyncio.new_event_loop()\nasyncio.set_event_loop(loop)\nloop.run_until_complete(main())\n```\n\n---\n\n### Concrete Example: Threading\n\n**Scenario:** Downloading 10 large files concurrently (using `requests`, which is synchronous).\n\n```python\nimport threading\nimport requests\nfrom concurrent.futures import ThreadPoolExecutor\n\ndef download_file(url, filename):\n    response = requests.get(url)  # Blocking call\n    with open(filename, 'wb') as f:\n        f.write(response.content)\n\nurls = [f\"https://example.com/file{i}.zip\" for i in range(10)]\nfilenames = [f\"file{i}.zip\" for i in range(10)]\n\n# Use ThreadPoolExecutor to manage threads\nwith ThreadPoolExecutor(max_workers=10) as executor:\n    executor.map(download_file, urls, filenames)\n```\n\n---\n\n### Main Tradeoff (One Line)\n\n**Asyncio** offers higher concurrency with lower memory/CPU overhead for I/O-bound tasks but requires all libraries in the chain to be async-aware, while **threading** works with existing synchronous code and can handle CPU-bound tasks (with GIL limitations) but suffers from higher overhead and complexity in managing shared state.",
+      "finish_reason": "stop",
+      "wall_s": 7.24,
+      "completion_tokens": 520,
+      "prompt_tokens": 37
+    },
+    {
+      "id": "des2",
+      "category": "design",
+      "prompt": "You are designing a URL shortener expected to handle 100M shortened URLs and ~1k redirects/sec. Describe the data model, the read path, and one scaling risk. <200 words.",
+      "max_tokens": 700,
+      "response": "**Data Model:** Use a distributed NoSQL key-value store (e.g., Cassandra or DynamoDB). The primary key is the short code (6-8 alphanumeric characters), and the value is the target URL. A secondary index or separate table maps original URLs to short codes to handle duplicate creation checks.\n\n**Read Path:** Upon receiving a request for the short code, the system queries the key-value store. If found, it returns a 301/302 HTTP redirect to the stored target URL. For performance, cache hot entries in an in-memory store like Redis, positioned before the database, to reduce latency and backend load.\n\n**Scaling Risk:** **Key Collision.** With 100M URLs, the probability of hash collisions increases if the short code space is too small. Using a 6-character base-62 string yields ~56 billion combinations, which is sufficient, but poor randomization or sequential generation can lead to hotspots or collisions. To mitigate, use a distributed unique ID generator (like Snowflake) or consistent hashing to distribute writes evenly across shards, preventing single-node bottlenecks. Additionally, monitor cache hit rates; if they drop, the database may become overwhelmed by the 1k/sec traffic, leading to increased latency or failures.",
+      "finish_reason": "stop",
+      "wall_s": 4.32,
+      "completion_tokens": 262,
+      "prompt_tokens": 56
+    },
+    {
+      "id": "des3",
+      "category": "design",
+      "prompt": "When building a CLI tool in Go vs Rust, what are the main tradeoffs? Give one situation where each is the better pick.",
+      "max_tokens": 700,
+      "response": "Choosing between Go and Rust for a Command-Line Interface (CLI) tool is a common dilemma. Both are excellent choices, but they approach the problem with different philosophies and trade-offs.\n\n### Main Tradeoffs\n\n| Feature | Go | Rust |\n| :--- | :--- | :--- |\n| **Learning Curve** | **Low.** Simple syntax, small standard library, easy to pick up for beginners. | **Steep.** Ownership, borrowing, and lifetimes require a mental shift. Steeper initial investment. |\n| **Compilation Speed** | **Fast.** Builds are typically instant, even for large projects. | **Slow.** Initial builds can be slow due to heavy optimization and type checking. Incremental builds help but aren’t as fast as Go. |\n| **Binary Size** | **Larger.** Statically linked binaries include a runtime, often resulting in 5–15 MB binaries. | **Smaller.** Highly optimized, no runtime overhead. Binaries can be <1 MB for simple tools. |\n| **Memory Safety** | **Garbage Collected.** Safe from memory errors but with GC pauses and higher memory overhead. | **Zero-cost Abstractions.** Memory safety without a GC. No runtime overhead, but harder to get right. |\n| **Error Handling** | **Explicit.** Returns `error` as a value. Simple but verbose. | **Result/Option types.** Powerful but can lead to verbose `?` chaining and complex type signatures. |\n| **Ecosystem** | **Standard Library & Simple Modules.** Great for networking, HTTP, JSON. Fewer \"batteries-included\" CLI libraries. | **Cargo Ecosystem.** Rich CLI ecosystem (e.g., `clap`, `eyre`, `anyhow`). More mature for complex CLI parsing and error handling. |\n| **Concurrency** | **Goroutines.** Lightweight, built-in concurrency model. Easy to parallelize I/O-bound tasks. | **Async/Await + Threads.** More complex but powerful. Better for high-performance concurrent systems. |\n\n---\n\n### When to Choose Go\n\n#### ✅ Better Pick: **Simple, I/O-Bound Tools with Rapid Development Needs**\n\n**Situation:** You need to build a **utility that fetches data from an API, processes it, and outputs it** (e.g., a GitHub issue tracker, a config validator, or a simple data exporter).\n\n**Why Go?**\n- **Speed of Development:** You can get a working prototype in minutes.\n- **Simple Concurrency:** Goroutines make it trivial to fetch multiple URLs or process files in parallel.\n- **Standard Library:** JSON handling, HTTP clients, and file I/O are built-in and well-tested.\n- **Deployment:** Easy to cross-compile and deploy. The larger binary size is rarely an issue for tools that take >1 second to run.\n- **Team Friendliness:** If your team has mixed skill levels, Go’s simplicity reduces bugs and onboarding time.\n\n**Example Tool:** `gh-cli` (GitHub CLI) – while it has Rust components, the core is largely Go, leveraging its ease of networking and concurrency.\n\n---\n\n### When to Choose Rust\n\n#### ✅ Better Pick: **High-Performance, Memory-Constrained, or Complex Parsing Tools**\n\n**Situation:** You need to build a **tool that processes large files, performs",
+      "finish_reason": "length",
+      "wall_s": 10.81,
+      "completion_tokens": 700,
+      "prompt_tokens": 39
+    },
+    {
+      "id": "rea1",
+      "category": "reasoning",
+      "prompt": "A bat and a ball cost $1.10 in total. The bat costs $1.00 more than the ball. How much does the ball cost? Show your reasoning in 2-3 lines.",
+      "max_tokens": 300,
+      "response": "Let the ball's cost be $x$; then the bat costs $x + 1.00$.\nThe equation $x + (x + 1.00) = 1.10$ simplifies to $2x = 0.10$, so the ball costs **$0.05**.",
+      "finish_reason": "stop",
+      "wall_s": 1.08,
+      "completion_tokens": 70,
+      "prompt_tokens": 56
+    },
+    {
+      "id": "rea2",
+      "category": "reasoning",
+      "prompt": "If all Bloops are Razzies and all Razzies are Lazzies, is it necessarily true that all Bloops are Lazzies? Explain in one sentence why or why not.",
+      "max_tokens": 300,
+      "response": "Yes, it is necessarily true because the statement demonstrates a transitive relationship in logic: if the set of Bloops is entirely contained within the set of Razzies, and the set of Razzies is entirely contained within the set of Lazzies, then the set of Bloops must also be entirely contained within the set of Lazzies.",
+      "finish_reason": "stop",
+      "wall_s": 1.19,
+      "completion_tokens": 72,
+      "prompt_tokens": 52
+    },
+    {
+      "id": "rea3",
+      "category": "reasoning",
+      "prompt": "You have 3 boxes labeled 'apples', 'oranges', and 'mixed'. Every label is WRONG. You may pull one fruit from one box. How do you label all three correctly? Explain the reasoning.",
+      "max_tokens": 500,
+      "response": "To solve this puzzle, you must rely on the critical constraint: **Every label is wrong.**\n\n### Step-by-Step Deduction\n\n1.  **Analyze the Labels:**\n    *   Box A is labeled \"Apples\"\n    *   Box B is labeled \"Oranges\"\n    *   Box C is labeled \"Mixed\"\n\n    Since all labels are incorrect:\n    *   Box A does **not** contain only Apples.\n    *   Box B does **not** contain only Oranges.\n    *   Box C does **not** contain Mixed fruit.\n\n2.  **Choose the Correct Box to Sample:**\n    You should pick a fruit from the box labeled **\"Mixed\"**.\n\n    *   *Why?* Because the label \"Mixed\" is wrong, we know for certain that this box contains **only** apples OR **only** oranges. It cannot contain a mixture. This gives us a definitive binary choice based on a single sample.\n\n3.  **Perform the Sample:**\n    Pull one fruit from the box labeled \"Mixed\".\n\n    **Case 1: You pull an Apple.**\n    *   Since the \"Mixed\" label is wrong, and we pulled an apple, this box must contain **only Apples**.\n    *   Now we have two boxes left: the one labeled \"Apples\" and the one labeled \"Oranges\".\n    *   We have two contents left to assign: \"Oranges\" and \"Mixed\".\n    *   Look at the box labeled **\"Oranges\"**. Its label is wrong, so it cannot contain only Oranges. It also cannot contain Apples (because we already identified the all-Apples box). Therefore, the box labeled \"Oranges\" must contain **Mixed** fruit.\n    *   The last remaining box is the one labeled **\"Apples\"**. It must contain the last remaining content: **Oranges**.\n\n    **Case 2: You pull an Orange.**\n    *   Since the \"Mixed\" label is wrong, and we pulled an orange, this box must contain **only Oranges**.\n    *   Now we have two boxes left: the one labeled \"Apples\" and the one labeled \"Oranges\".\n    *   We have two contents left to assign: \"Apples\" and \"Mixed\".\n    *   Look at the box labeled **\"Apples\"",
+      "finish_reason": "length",
+      "wall_s": 6.73,
+      "completion_tokens": 500,
+      "prompt_tokens": 56
+    },
+    {
+      "id": "mat1",
+      "category": "math",
+      "prompt": "Solve step by step: a train travels 60 km/h for 2 hours, then 80 km/h for 1.5 hours. What is the average speed for the whole journey? Show your work.",
+      "max_tokens": 500,
+      "response": "To find the average speed for the whole journey, we must use the formula:\n\n$$ \\text{Average Speed} = \\frac{\\text{Total Distance}}{\\text{Total Time}} $$\n\n**Note:** The average speed is **not** simply the average of the two speeds ($\\frac{60+80}{2}$), because the train spends different amounts of time traveling at each speed.\n\nHere is the step-by-step calculation:\n\n### Step 1: Calculate the distance traveled in the first part of the journey\n*   Speed ($v_1$) = $60$ km/h\n*   Time ($t_1$) = $2$ hours\n\n$$ \\text{Distance}_1 = v_1 \\times t_1 $$\n$$ \\text{Distance}_1 = 60 \\, \\text{km/h} \\times 2 \\, \\text{h} = 120 \\, \\text{km} $$\n\n### Step 2: Calculate the distance traveled in the second part of the journey\n*   Speed ($v_2$) = $80$ km/h\n*   Time ($t_2$) = $1.5$ hours\n\n$$ \\text{Distance}_2 = v_2 \\times t_2 $$\n$$ \\text{Distance}_2 = 80 \\, \\text{km/h} \\times 1.5 \\, \\text{h} = 120 \\, \\text{km} $$\n\n### Step 3: Calculate the total distance\n$$ \\text{Total Distance} = \\text{Distance}_1 + \\text{Distance}_2 $$\n$$ \\text{Total Distance} = 120 \\, \\text{km} + 120 \\, \\text{km} = 240 \\, \\text{km} $$\n\n### Step 4: Calculate the total time\n$$ \\text{Total Time} = t_1 + t_2 $$\n$$ \\text{Total Time} = 2 \\, \\text{h} + 1.5 \\, \\text{h} = 3.5 \\, \\text{h} $$\n\n### Step 5: Calculate the average speed\n$$ \\text{Average Speed} = \\frac{\\text{Total Distance}}{\\text{Total Time}}",
+      "finish_reason": "length",
+      "wall_s": 5.96,
+      "completion_tokens": 500,
+      "prompt_tokens": 58
+    },
+    {
+      "id": "mat2",
+      "category": "math",
+      "prompt": "How many ways can you arrange the letters in the word BANANA? Show your reasoning.",
+      "max_tokens": 500,
+      "response": "To find the number of ways to arrange the letters in the word **BANANA**, we must calculate the number of distinct permutations of a multiset (a set with repeated elements).\n\n### Step 1: Count the total number of letters\nThe word BANANA has a total of 6 letters.\n$$ n = 6 $$\n\n### Step 2: Identify the frequency of each letter\nWe break down the letters by their type:\n*   **A**: appears 3 times\n*   **N**: appears 2 times\n*   **B**: appears 1 time\n\nCheck: $3 + 2 + 1 = 6$. The counts match the total number of letters.\n\n### Step 3: Apply the permutation formula for multisets\nThe formula for the number of distinct permutations of $n$ items, where there are duplicates, is:\n\n$$ P = \\frac{n!}{n_1! \\cdot n_2! \\cdot ... \\cdot n_k!} $$\n\nWhere:\n*   $n!$ is the factorial of the total number of items.\n*   $n_1!, n_2!, etc.$ are the factorials of the counts of each identical item.\n\nSubstituting our values:\n*   $n = 6$\n*   $n_A = 3$ (for the three A's)\n*   $n_N = 2$ (for the two N's)\n*   $n_B = 1$ (for the one B)\n\n$$ P = \\frac{6!}{3! \\cdot 2! \\cdot 1!} $$\n\n### Step 4: Calculate the factorials\n*   $6! = 6 \\times 5 \\times 4 \\times 3 \\times 2 \\times 1 = 720$\n*   $3! = 3 \\times 2 \\times 1 = 6$\n*   $2! = 2 \\times 1 = 2$\n*   $1! = 1$\n\n### Step 5: Solve the equation\n$$ P = \\frac{720}{6 \\cdot 2 \\cdot 1} $$\n$$ P = \\frac{720}{12} $$\n\nAlternatively, we can simplify before multiplying:\n$$ P = \\frac{6",
+      "finish_reason": "length",
+      "wall_s": 6.19,
+      "completion_tokens": 500,
+      "prompt_tokens": 30
+    },
+    {
+      "id": "mat3",
+      "category": "math",
+      "prompt": "Simplify and explain: what is the value of log2(8) + log2(32) - log2(2)?",
+      "max_tokens": 400,
+      "response": "To find the value of the expression $\\log_2(8) + \\log_2(32) - \\log_2(2)$, we can solve it using two methods: calculating each term individually or using logarithmic properties. Both methods yield the same result.\n\n### Method 1: Calculating Each Term Individually\n\nThe definition of a logarithm $\\log_b(x) = y$ is that $b^y = x$. In this case, the base $b$ is 2. We need to find the power to which 2 must be raised to equal the argument.\n\n1.  **Calculate $\\log_2(8)$**:\n    $$2^3 = 8 \\implies \\log_2(8) = 3$$\n\n2.  **Calculate $\\log_2(32)$**:\n    $$2^5 = 32 \\implies \\log_2(32) = 5$$\n\n3.  **Calculate $\\log_2(2)$**:\n    $$2^1 = 2 \\implies \\log_2(2) = 1$$\n\nNow, substitute these values back into the original expression:\n$$3 + 5 - 1$$\n\nPerform the arithmetic:\n$$8 - 1 = 7$$\n\n---\n\n### Method 2: Using Logarithmic Properties\n\nWe can combine the logarithms before calculating the final value using the product and quotient rules:\n*   **Product Rule**: $\\log_b(x) + \\log_b(y) = \\log_b(xy)$\n*   **Quotient Rule**: $\\log_b(x) - \\log_b(y) = \\log_b\\left(\\frac{x}{y}\\right)$\n\nApply these rules to the expression $\\log_2(8) + \\log_2(32) - \\log_2(2)$:\n\n1.",
+      "finish_reason": "length",
+      "wall_s": 5.09,
+      "completion_tokens": 400,
+      "prompt_tokens": 40
+    },
+    {
+      "id": "exp1",
+      "category": "explanation",
+      "prompt": "Explain how transformer attention works to a competent software engineer new to ML. Cover Q/K/V, softmax, and why scaling is needed. <150 words.",
+      "max_tokens": 700,
+      "response": "Transformer attention computes a weighted sum of values based on relevance to a query. For each input token, we generate three vectors: Query (Q), Key (K), and Value (V). Q represents what we are looking for, K what we offer, and V the actual content.\n\nTo determine relevance, we compute the dot product of Q and K. This yields raw attention scores. We then apply the softmax function to these scores, converting them into a probability distribution that sums to 1. This ensures the model focuses on the most relevant tokens while weighting others less.\n\nScaling is critical before softmax. Since Q and K vectors often have high dimensions, their dot products can become large, pushing the softmax function into regions with extremely small gradients (vanishing gradient problem). This causes slow or stalled learning. Dividing the dot products by the square root of the key dimension ($\\sqrt{d_k}$) keeps the values in a range where softmax remains sensitive, ensuring stable and efficient gradient updates during training. Finally, these weighted scores are multiplied by V to produce the output.",
+      "finish_reason": "stop",
+      "wall_s": 3.8,
+      "completion_tokens": 218,
+      "prompt_tokens": 46
+    },
+    {
+      "id": "exp2",
+      "category": "explanation",
+      "prompt": "What is the difference between TCP and UDP? List 4 concrete differences.",
+      "max_tokens": 600,
+      "response": "Based on your request, here is the logical deduction of the differences between Transmission Control Protocol (TCP) and User Datagram Protocol (UDP), followed by the four concrete differences.\n\n### Logical Analysis\n\nTo understand the differences, we must look at how these two protocols function at the Transport Layer (Layer 4) of the OSI model:\n\n1.  **Connection State**: TCP is designed for reliability. It requires a \"handshake\" (SYN, SYN-ACK, ACK) to establish a connection before data can be sent. This ensures both parties are ready. UDP, conversely, is \"connectionless.\" It simply fires data packets (datagrams) toward the destination without checking if the receiver is ready.\n2.  **Data Integrity**: Because TCP is connection-oriented, it tracks every packet. If a packet is lost or arrives out of order, TCP detects this and requests a retransmission. UDP does not track packets; if a packet is dropped, it is gone forever.\n3.  **Ordering**: TCP assigns sequence numbers to data segments, ensuring that the receiving application reconstructs the data stream in the exact order it was sent. UDP sends data in whatever order it arrives; if packets arrive out of order, the application receives them out of order.\n4.  **Speed and Overhead**: TCP requires more computational power and network bandwidth due to the overhead of acknowledgments (ACKs), flow control, and error checking. UDP has minimal overhead, making it significantly faster and more efficient for real-time applications where speed is prioritized over accuracy.\n\n---\n\n### Conclusion: 4 Concrete Differences\n\nHere are the four concrete differences between TCP and UDP:\n\n1.  **Connection Type**\n    *   **TCP**: Connection-oriented. It establishes a reliable connection (via a 3-way handshake) between sender and receiver before data transfer begins.\n    *   **UDP**: Connectionless. It sends data without establishing a connection or checking if the receiver is available.\n\n2.  **Reliability and Error Handling**\n    *   **TCP**: Reliable. It guarantees delivery by using acknowledgments (ACKs). If a packet is lost or corrupted, TCP automatically retransmits it.\n    *   **UDP**: Unreliable. It does not guarantee delivery, nor does it retransmit lost packets. If data is lost during transmission, it is discarded.\n\n3.  **Data Ordering**\n    *   **TCP**: Preserves order. It uses sequence numbers to ensure that data streams are reassembled in the exact order they were sent.\n    *   **UDP**: Does not preserve order. Packets may arrive out of sequence, and the protocol does not reorder them.\n\n4.  **Speed and Overhead**\n    *   **TCP**: Slower. It has higher overhead due to flow control, congestion control, and error-checking mechanisms.\n    *  ",
+      "finish_reason": "length",
+      "wall_s": 8.35,
+      "completion_tokens": 600,
+      "prompt_tokens": 27
+    },
+    {
+      "id": "exp3",
+      "category": "explanation",
+      "prompt": "Explain what a Python decorator does, using a non-trivial real example (not just logging). <120 words.",
+      "max_tokens": 600,
+      "response": "Python decorators modify function behavior by wrapping it. Consider a caching mechanism for expensive calculations. A `@cache` decorator stores results of previous function calls. If the same arguments are passed again, it returns the stored result instead of recomputing, significantly improving performance.\n\n```python\ndef cache(func):\n    memory = {}\n    def wrapper(*args):\n        if args not in memory:\n            memory[args] = func(*args)\n        return memory[args]\n    return wrapper\n\n@cache\ndef expensive_compute(n):\n    return sum(i**2 for i in range(n))\n```\n\nHere, `@cache` wraps `expensive_compute`. The first call computes the sum; subsequent identical calls retrieve the value from `memory`, avoiding redundant operations. This demonstrates how decorators cleanly separate cross-cutting concerns like caching from core logic, enhancing code reusability and readability without altering the original function’s source code.",
+      "finish_reason": "stop",
+      "wall_s": 3.09,
+      "completion_tokens": 192,
+      "prompt_tokens": 38
+    },
+    {
+      "id": "wri1",
+      "category": "writing",
+      "prompt": "Summarize the plot of Mary Shelley's Frankenstein in exactly 4 sentences.",
+      "max_tokens": 400,
+      "response": "Victor Frankenstein, an ambitious young scientist, creates a sentient creature from assembled body parts but is horrified by its appearance and immediately abandons it. The rejected creature, driven by loneliness and a desire for companionship, turns violent and murders Victor’s loved ones to exact revenge against his creator. In a relentless pursuit of justice and vengeance, Victor chases the monster to the Arctic, where he falls ill and dies while recounting his tragic story to Captain Walton. Following Victor's death, the grieving creature vows to end his own existence, disappearing into the frozen wilderness to die alone.",
+      "finish_reason": "stop",
+      "wall_s": 2.02,
+      "completion_tokens": 118,
+      "prompt_tokens": 29
+    },
+    {
+      "id": "wri2",
+      "category": "writing",
+      "prompt": "Write a short poem (8 lines) about a lighthouse keeper who discovers a message in a bottle.",
+      "max_tokens": 300,
+      "response": "The salt wind howls against the stone,\nWhere I stand watch and keep alone.\nA glass sphere drifts on waves so deep,\nA secret promises to keep.\n\nI crack the wax with trembling hand,\nAnd read the words by candlestand.\n*\"The light still burns, the dark is gone,\"*\nA stranger’s voice from dusk till dawn.",
+      "finish_reason": "stop",
+      "wall_s": 1.56,
+      "completion_tokens": 78,
+      "prompt_tokens": 33
+    },
+    {
+      "id": "wri3",
+      "category": "writing",
+      "prompt": "Write a 3-line professional email declining a meeting invitation politely, suggesting an async alternative.",
+      "max_tokens": 300,
+      "response": "Subject: Re: Meeting Invitation – [Topic/Date]\n\nThank you for the invitation, but I will need to decline as I currently have a conflict with the proposed time. I would be happy to continue our discussion asynchronously via email to ensure we move forward efficiently. Please let me know if this approach works for you.",
+      "finish_reason": "stop",
+      "wall_s": 1.13,
+      "completion_tokens": 66,
+      "prompt_tokens": 30
+    }
+  ]
+}

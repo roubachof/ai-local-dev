@@ -1,0 +1,726 @@
+#!/usr/bin/env bash
+# ============================================================================
+# ai-local-tunnel — Reverse SSH tunnel to expose the local Qwen proxies
+# (27B on LLAMA_PROXY_PORT, 35B on PROXY_35B_PORT) to a remote Hermes instance
+# running on a server without a GPU (e.g. OVH).
+#
+# The remote Hermes sees the endpoints as "local" (http://127.0.0.1:<port>/v1)
+# because ssh -R binds those ports on the remote's loopback and forwards them
+# back to the MacBook. No model needs to be downloaded on the remote.
+#
+# When run, the script:
+#   1. Checks which local proxies are up (and warns about -thinking mode).
+#   2. Opens the reverse tunnel (background by default, --fg to foreground).
+#   3. Prints the exact ~/.hermes/config.yaml block to paste on the remote.
+#
+# Usage:
+#   ai-local-tunnel <user@host> [--fg] [--ssh-port N] [-i KEY]
+#   ai-local-tunnel stop <user@host>
+#   ai-local-tunnel status
+#   ai-local-tunnel help
+# ============================================================================
+set -euo pipefail
+
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
+while [[ -L "$SCRIPT_SOURCE" ]]; do
+    SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+AI_LOCAL_DEV_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if [[ ! -f "$AI_LOCAL_DEV_DIR/config/.qwen-local.conf" ]] && \
+   [[ -f "$HOME/.local/share/ai-local-dev/config/.qwen-local.conf" ]]; then
+    AI_LOCAL_DEV_DIR="$HOME/.local/share/ai-local-dev"
+fi
+
+# shellcheck disable=SC1091
+source "$AI_LOCAL_DEV_DIR/lib/qwen-config.sh"
+load_qwen_config
+ensure_state_dirs
+
+log_info()    { echo "📌 $*"; }
+log_warn()    { echo "⚠️  $*"; }
+log_error()   { echo "❌ $*" >&2; exit 1; }
+log_success() { echo "✅ $*"; }
+
+# ---- Model id resolution (mirrors ai-local's start_*_stack selection) ----
+resolve_model_id() {
+    local which=$1
+    if [[ "$which" == "27b" ]]; then
+        if [[ "$LLAMA_MTP" == "1" && -f "$QWEN_27B_MTP_MODEL" ]]; then
+            basename "$QWEN_27B_MTP_MODEL"
+        else
+            basename "$QWEN_27B_MODEL"
+        fi
+    else
+        if [[ "$LLAMA_MTP" == "1" && -f "$QWEN_35B_MTP_MODEL" ]]; then
+            basename "$QWEN_35B_MTP_MODEL"
+        else
+            basename "$QWEN_35B_MODEL"
+        fi
+    fi
+}
+
+MODEL_27B_ID="$(resolve_model_id 27b)"
+MODEL_35B_ID="$(resolve_model_id 35b)"
+
+# ---- Filename-safe host slug ----
+host_slug() {
+    local host=$1
+    local s
+    s="${host//\//_}"
+    s="${s//:/_}"
+    s="${s// /_}"
+    echo "$s"
+}
+
+# ---- Resolve an SSH target (user@host or alias) via `ssh -G` ----
+# Returns "user@hostname" if resolvable, else the input unchanged.
+# Used to (a) validate aliases and (b) show the user where the alias points.
+resolve_ssh_target() {
+    local host=$1
+    local cfg u h
+    cfg=$(ssh -G "$host" 2>/dev/null || true)
+    u=$(echo "$cfg" | awk '/^user /{print $2; exit}')
+    h=$(echo "$cfg" | awk '/^hostname /{print $2; exit}')
+    if [[ -n "$u" && -n "$h" ]]; then
+        echo "$u@$h"
+    else
+        echo "$host"
+    fi
+}
+
+tunnel_pid_file() {
+    echo "$AI_LOCAL_RUN_DIR/tunnel-$(host_slug "$1").pid"
+}
+
+tunnel_log_file() {
+    echo "$AI_LOCAL_LOG_DIR/tunnel-$(host_slug "$1").log"
+}
+
+# ---- Active thinking-model detection ----
+# Source of truth for thinking mode = the proxy process environment: ai-local
+# launches the proxy with `nohup env AI_LOCAL_FORCE_THINK=... python nothink_proxy.py`,
+# so `ps eww -p <pid>` exposes AI_LOCAL_FORCE_THINK. We only accept a model that
+# is BOTH up (health ok) AND in thinking mode (AI_LOCAL_FORCE_THINK=1), per the
+# user's requirement.
+#
+# Sets globals on success:
+#   ACTIVE_WHICH   = 27b | 35b
+#   ACTIVE_PORT    = LLAMA_PROXY_PORT | PROXY_35B_PORT
+#   ACTIVE_MODEL_ID, ACTIVE_CTX, ACTIVE_PROVIDER_NAME
+# Returns 0 if a thinking model is up, 1 otherwise (with a diagnostic printed).
+proxy_pid_for() {
+    local which=$1
+    local svc
+    [[ "$which" == "27b" ]] && svc="proxy-27b" || svc="proxy-35b"
+    local pid
+    pid=$(cat "$AI_LOCAL_RUN_DIR/${svc}.pid" 2>/dev/null || true)
+    if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" >/dev/null 2>&1; then
+        echo "$pid"
+        return 0
+    fi
+    # Fallback: pgrep by cmdline pattern (mirrors ai-local's status_line fallback).
+    local port
+    [[ "$which" == "27b" ]] && port="$LLAMA_PROXY_PORT" || port="$PROXY_35B_PORT"
+    pgrep -f "nothink_proxy.py.*--port[ =]${port}" 2>/dev/null | head -1 || true
+}
+
+# Read a single env var from a running process (macOS: ps eww).
+proxy_env_var() {
+    local pid=$1 var=$2
+    [[ -n "$pid" ]] || return 1
+    ps eww -p "$pid" 2>/dev/null | tr ' ' '\n' | grep -E "^${var}=" | head -1 | cut -d= -f2-
+}
+
+# Probe one model family. Echoes "thinking" | "nothink" | "down".
+probe_model() {
+    local which=$1 port pid ft
+    [[ "$which" == "27b" ]] && port="$LLAMA_PROXY_PORT" || port="$PROXY_35B_PORT"
+    is_service_running "$port" "/health" || { echo "down"; return 0; }
+    pid=$(proxy_pid_for "$which")
+    ft=$(proxy_env_var "$pid" "AI_LOCAL_FORCE_THINK")
+    if [[ "$ft" == "1" ]]; then echo "thinking"; else echo "nothink"; fi
+}
+
+detect_active_thinking_model() {
+    ACTIVE_WHICH=""; ACTIVE_PORT=""; ACTIVE_MODEL_ID=""; ACTIVE_CTX=""; ACTIVE_PROVIDER_NAME=""
+    local s27 s35
+    s27=$(probe_model 27b)
+    s35=$(probe_model 35b)
+    local up27=0 up35=0 think27=0 think35=0
+    [[ "$s27" == "thinking" ]] && think27=1
+    [[ "$s35" == "thinking" ]] && think35=1
+    [[ "$s27" != "down" ]] && up27=1
+    [[ "$s35" != "down" ]] && up35=1
+
+    # Prefer a thinking model. If both thinking (non-single-model mode), pick 35b
+    # (larger/better) — but in the default SINGLE_MODEL_MODE=1 only one is up.
+    if [[ "$think35" == "1" ]]; then
+        ACTIVE_WHICH="35b"
+    elif [[ "$think27" == "1" ]]; then
+        ACTIVE_WHICH="27b"
+    fi
+
+    if [[ -n "$ACTIVE_WHICH" ]]; then
+        if [[ "$ACTIVE_WHICH" == "35b" ]]; then
+            ACTIVE_PORT="$PROXY_35B_PORT"; ACTIVE_MODEL_ID="$MODEL_35B_ID"
+            ACTIVE_CTX="$LLAMA_35B_CTX_SIZE"; ACTIVE_PROVIDER_NAME="ai-local-35b"
+        else
+            ACTIVE_PORT="$LLAMA_PROXY_PORT"; ACTIVE_MODEL_ID="$MODEL_27B_ID"
+            ACTIVE_CTX="$LLAMA_CTX_SIZE"; ACTIVE_PROVIDER_NAME="ai-local-27b"
+        fi
+        return 0
+    fi
+
+    # No thinking model up — give a precise diagnostic.
+    echo ""
+    if [[ "$up27" == "1" && "$s27" == "nothink" ]] && [[ "$up35" == "0" ]]; then
+        log_error "Le 27B tourne mais en mode NO-THINK (AI_LOCAL_FORCE_THINK=0). Le relancer en thinking : ai-local stop 27b && ai-local 27b-thinking"
+    elif [[ "$up35" == "1" && "$s35" == "nothink" ]] && [[ "$up27" == "0" ]]; then
+        log_error "Le 35B tourne mais en mode NO-THINK (AI_LOCAL_FORCE_THINK=0). Le relancer en thinking : ai-local stop 35b && ai-local 35b-thinking"
+    elif [[ "$up27" == "1" && "$up35" == "1" ]]; then
+        log_error "Des modèles tournent mais AUCUN en thinking. Relancer en thinking : ai-local 27b-thinking (ou 35b-thinking)"
+    else
+        log_error "Aucun modèle local ne tourne. Lancer d'abord : ai-local 27b-thinking (ou 35b-thinking)"
+    fi
+    return 1
+}
+
+tunnel_is_running() {
+    local host=$1
+    local pid
+    pid="$(cat "$(tunnel_pid_file "$host")" 2>/dev/null || true)"
+    [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" >/dev/null 2>&1
+}
+
+# ---- Build the -R flag lines (both ports always forwarded) ----
+build_reverse_flags() {
+    # Forward both ports regardless of which model is currently up. With
+    # AI_LOCAL_SINGLE_MODEL_MODE=1 only one is listening at a time, but the
+    # remote config declares both providers; whichever model is running on
+    # the Mac is the one that responds. The other returns connection refused
+    # until that stack is started on the Mac.
+    printf -- '-R %s:127.0.0.1:%s\n' "$LLAMA_PROXY_PORT" "$LLAMA_PROXY_PORT"
+    printf -- '-R %s:127.0.0.1:%s\n' "$PROXY_35B_PORT" "$PROXY_35B_PORT"
+}
+
+# ---- Print the Hermes config block to paste on the remote ----
+# Defaults `model.default` to the detected active thinking model (falls back to
+# 27b so the snippet stays a usable template when nothing is up).
+print_remote_config() {
+    local host=$1
+    if [[ -z "$ACTIVE_WHICH" ]]; then
+        detect_active_thinking_model >/dev/null 2>&1 || true
+    fi
+    local def_model="${ACTIVE_MODEL_ID:-$MODEL_27B_ID}"
+    local def_provider="${ACTIVE_PROVIDER_NAME:-ai-local-27b}"
+    local def_port="${ACTIVE_PORT:-$LLAMA_PROXY_PORT}"
+    local def_ctx="${ACTIVE_CTX:-$LLAMA_CTX_SIZE}"
+    cat << EOF
+
+═══════════════════════════════════════════════════════════════════════════
+  Config Hermes à coller sur le serveur distant : $host
+  Fichier : ~/.hermes/config.yaml
+  (remplacer le block \`model:\` existant + ajouter la liste \`custom_providers:\`)
+═══════════════════════════════════════════════════════════════════════════
+
+model:
+  default: $def_model
+  provider: custom:$def_provider
+  base_url: http://127.0.0.1:$def_port/v1
+  api_key: sk-local-no-auth
+  context_length: $def_ctx
+
+custom_providers:
+  - name: ai-local-35b
+    base_url: http://127.0.0.1:$PROXY_35B_PORT/v1
+    api_mode: chat_completions
+    models:
+      $MODEL_35B_ID:
+        context_length: $LLAMA_35B_CTX_SIZE
+  - name: ai-local-27b
+    base_url: http://127.0.0.1:$LLAMA_PROXY_PORT/v1
+    api_mode: chat_completions
+    models:
+      $MODEL_27B_ID:
+        context_length: $LLAMA_CTX_SIZE
+
+───────────────────────────────────────────────────────────────────────────
+  Vérification sur le distant (depuis une session SSH sur $host)
+───────────────────────────────────────────────────────────────────────────
+
+  curl -s http://127.0.0.1:$LLAMA_PROXY_PORT/health    # -> {"status":"ok"}
+  hermes doctor                                        # pas d'"Unknown provider"
+  hermes --tui                                         # /model → ai-local-27b & ai-local-35b
+
+  Switch en session :
+  /model custom:ai-local-27b:$MODEL_27B_ID
+  /model custom:ai-local-35b:$MODEL_35B_ID
+
+───────────────────────────────────────────────────────────────────────────
+  ⚠️  Rappels
+───────────────────────────────────────────────────────────────────────────
+  • Le modèle doit tourner sur le Mac EN MODE THINKING :
+      ai-local 27b-thinking    ou    ai-local 35b-thinking
+    (sans le suffixe, le proxy force no-think + strip les blocs <think>)
+EOF
+    if [[ "$AI_LOCAL_SINGLE_MODEL_MODE" == "1" ]]; then
+        cat << EOF
+  • SINGLE_MODEL_MODE=1 sur le Mac : un seul modèle à la fois. Tous les Hermes
+    distants partagent le MÊME modèle (celui lancé sur le Mac). Impossible
+    d'avoir un distant sur le 27B et un autre sur le 35B simultanément.
+EOF
+    fi
+    cat << EOF
+  • Le Mac doit rester allumé + le tunnel ouvert pendant toute la session.
+  • sshd distant : AllowTcpForwarding yes (défaut), GatewayPorts no (défaut).
+    Si AllowTcpForwarding=no, le passer à yes dans /etc/ssh/sshd_config.
+───────────────────────────────────────────────────────────────────────────
+
+EOF
+}
+
+# ---- Subcommands ----
+cmd_start() {
+    local host=""
+    local fg=0
+    local ssh_port=22
+    local identity=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --fg)        fg=1; shift ;;
+            --ssh-port)  ssh_port="$2"; shift 2 ;;
+            -i|--identity) identity="$2"; shift 2 ;;
+            -h|--help)   cmd_help; exit 0 ;;
+            *)
+                if [[ -z "$host" ]]; then
+                    host="$1"
+                else
+                    log_error "Argument inattendu : $1 (voir ai-local-tunnel help)"
+                fi
+                shift
+                ;;
+        esac
+    done
+    [[ -n "$host" ]] || log_error "Usage : ai-local-tunnel <user@host | ssh-alias> [--fg] [--ssh-port N] [-i KEY]"
+    # Accept user@host OR an SSH alias from ~/.ssh/config (ssh resolves both).
+    # Reject flag-like args that slipped past the case above.
+    [[ "$host" == -* ]] && log_error "Argument inattendu : $host (voir ai-local-tunnel help)"
+    local resolved
+    resolved=$(resolve_ssh_target "$host")
+    if [[ "$host" != *"@"* ]]; then
+        # Bare token : must resolve to a real user@hostname via ssh -G, otherwise
+        # it's a typo rather than a configured alias.
+        if [[ "$resolved" == "$host" ]]; then
+            log_error "Hôte invalide : '$host' (ni user@host ni alias SSH connu — voir ~/.ssh/config)"
+        fi
+    fi
+
+    local up27=0 up35=0
+    is_service_running "$LLAMA_PROXY_PORT" "/health" && up27=1 || true
+    is_service_running "$PROXY_35B_PORT"  "/health" && up35=1 || true
+
+    echo "=== ai-local-tunnel → $host ==="
+    if [[ "$host" != *"@"* && "$resolved" != "$host" ]]; then
+        echo "  (alias SSH → $resolved)"
+    fi
+    echo ""
+    if [[ "$up27" == "1" ]]; then
+        log_success "27B proxy up  : port $LLAMA_PROXY_PORT (model: $MODEL_27B_ID)"
+    else
+        log_warn "27B proxy down : port $LLAMA_PROXY_PORT — forwardé mais 'connection refused' tant que 'ai-local 27b-thinking' n'est pas lancé"
+    fi
+    if [[ "$up35" == "1" ]]; then
+        log_success "35B proxy up  : port $PROXY_35B_PORT (model: $MODEL_35B_ID)"
+    else
+        log_warn "35B proxy down : port $PROXY_35B_PORT — forwardé mais 'connection refused' tant que 'ai-local 35b-thinking' n'est pas lancé"
+    fi
+    if [[ "$up27" == "0" && "$up35" == "0" ]]; then
+        echo ""
+        log_warn "Aucun modèle local ne tourne. Lancer d'abord : ai-local 27b-thinking (ou 35b-thinking)."
+        log_warn "Le tunnel s'ouvre quand même, mais les appels échoueront jusqu'au démarrage d'un stack."
+    fi
+
+    if tunnel_is_running "$host"; then
+        echo ""
+        log_warn "Un tunnel vers $host est déjà actif (PID $(cat "$(tunnel_pid_file "$host")"))."
+        log_info "Pour le relancer : ai-local-tunnel stop $host  puis  ai-local-tunnel $host"
+        return 0
+    fi
+
+    # Print the config BEFORE opening the tunnel so it stays visible.
+    print_remote_config "$host"
+
+    if [[ "$fg" == "1" ]]; then
+        local -a ssh_argv=(ssh -N -p "$ssh_port")
+        local line
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && ssh_argv+=("$line")
+        done < <(build_reverse_flags)
+        ssh_argv+=(-o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes)
+        [[ -n "$identity" ]] && ssh_argv+=(-i "$identity")
+        ssh_argv+=("$host")
+        log_info "Tunnel foreground : ${ssh_argv[*]}"
+        log_info "Ctrl+C pour fermer le tunnel."
+        exec "${ssh_argv[@]}"
+    fi
+
+    open_tunnel_bg "$host" "$ssh_port" "$identity" || return 1
+    log_info "Arrêt   : ai-local-tunnel stop $host"
+    log_info "Statut  : ai-local-tunnel status"
+}
+
+# Open (or reuse) the reverse tunnel in the background. Sets the PID file.
+# Args: host ssh_port identity. Echoes logs. Returns 0 on success, 1 on failure.
+# Foreground mode is NOT handled here (caller decides).
+open_tunnel_bg() {
+    local host=$1 ssh_port=$2 identity=$3
+    if tunnel_is_running "$host"; then
+        log_info "Tunnel vers $host déjà actif (PID $(cat "$(tunnel_pid_file "$host")")) — réutilisé."
+        return 0
+    fi
+    local -a ssh_argv=(ssh -N -p "$ssh_port")
+    local line
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && ssh_argv+=("$line")
+    done < <(build_reverse_flags)
+    ssh_argv+=(-o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes)
+    [[ -n "$identity" ]] && ssh_argv+=(-i "$identity")
+    ssh_argv+=("$host")
+    local log_file
+    log_file="$(tunnel_log_file "$host")"
+    log_info "Ouverture du tunnel (background) : ${ssh_argv[*]}"
+    nohup "${ssh_argv[@]}" > "$log_file" 2>&1 &
+    local pid=$!
+    echo "$pid" > "$(tunnel_pid_file "$host")"
+    sleep 2
+    if kill -0 "$pid" >/dev/null 2>&1; then
+        log_success "Tunnel ouvert (PID $pid) → $host"
+        log_info "Logs    : tail -f $log_file"
+        return 0
+    else
+        rm -f "$(tunnel_pid_file "$host")"
+        log_error "Le tunnel a échoué (ssh est mort immédiatement). Voir le log : $log_file"
+        return 1
+    fi
+}
+
+# ---- Remote helpers ----
+# SSH non-interactif ne source pas .bashrc, donc hermes (et uv) ne sont pas
+# dans le PATH. On force le PATH que .bashrc aurait défini.
+REMOTE_PATH_PREFIX='$HOME/.hermes/hermes-agent/venv/bin:$HOME/.local/bin'
+
+remote_exec() {
+    # $1 = host, rest = command (single string)
+    local host=$1; shift
+    ssh -o ServerAliveInterval=30 "$host" \
+        "export PATH=\"${REMOTE_PATH_PREFIX}:\$PATH\"; $*"
+}
+
+# Build the python merge script (printed to stdout) that updates the Hermes
+# config file on the remote: replaces the `model:` block and adds `custom_providers:`.
+# The config path is passed as argv[1] so we merge the file Hermes ACTUALLY reads
+# (which may be a profile: ~/.hermes/profiles/<name>/config.yaml), not always
+# ~/.hermes/config.yaml. Resolve it on the remote via `hermes config path`.
+remote_merge_script() {
+    cat << PYEOF
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+if not p.exists():
+    raise SystemExit(f"no config file at {p} — run 'hermes setup' on the remote first")
+lines = p.read_text().splitlines(keepends=True)
+
+new_model = [
+    "model:\n",
+    "  default: $ACTIVE_MODEL_ID\n",
+    "  provider: custom:$ACTIVE_PROVIDER_NAME\n",
+    "  base_url: http://127.0.0.1:$ACTIVE_PORT/v1\n",
+    "  api_key: sk-local-no-auth\n",
+    "  context_length: $ACTIVE_CTX\n",
+]
+custom_providers = [
+    "custom_providers:\n",
+    "  - name: ai-local-35b\n",
+    "    base_url: http://127.0.0.1:$PROXY_35B_PORT/v1\n",
+    "    api_mode: chat_completions\n",
+    "    models:\n",
+    "      $MODEL_35B_ID:\n",
+    "        context_length: $LLAMA_35B_CTX_SIZE\n",
+    "  - name: ai-local-27b\n",
+    "    base_url: http://127.0.0.1:$LLAMA_PROXY_PORT/v1\n",
+    "    api_mode: chat_completions\n",
+    "    models:\n",
+    "      $MODEL_27B_ID:\n",
+    "        context_length: $LLAMA_CTX_SIZE\n",
+]
+
+def toplevel(s):
+    return s and not s[0].isspace() and not s.startswith("#")
+
+m_start = next(i for i,l in enumerate(lines) if l.startswith("model:"))
+m_end = m_start + 1
+while m_end < len(lines) and not toplevel(lines[m_end]):
+    m_end += 1
+
+has_cp = any(l.startswith("custom_providers:") for l in lines)
+out = lines[:m_start] + new_model + lines[m_end:]
+if not has_cp:
+    fp_start = next((i for i,l in enumerate(out) if l.startswith("fallback_providers:")), None)
+    if fp_start is None:
+        fp_start = next(i for i,l in enumerate(out) if l.startswith("providers:"))
+    fp_end = fp_start + 1
+    while fp_end < len(out) and not toplevel(out[fp_end]):
+        fp_end += 1
+    out = out[:fp_end] + custom_providers + out[fp_end:]
+else:
+    # Replace existing custom_providers block too (idempotent).
+    cp_start = next(i for i,l in enumerate(out) if l.startswith("custom_providers:"))
+    cp_end = cp_start + 1
+    while cp_end < len(out) and not toplevel(out[cp_end]):
+        cp_end += 1
+    out = out[:cp_start] + custom_providers + out[cp_end:]
+
+p.write_text("".join(out))
+print("merged")
+PYEOF
+}
+
+cmd_setup() {
+    local host="" ssh_port=22 identity="" skip_chat=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --ssh-port)  ssh_port="$2"; shift 2 ;;
+            -i|--identity) identity="$2"; shift 2 ;;
+            --no-chat)  skip_chat=1; shift ;;
+            -h|--help)  echo "Usage: ai-local-tunnel setup <user@host | alias> [--ssh-port N] [-i KEY] [--no-chat]"; return 0 ;;
+            *)
+                [[ -z "$host" ]] && host="$1" || log_error "Argument inattendu : $1"
+                shift ;;
+        esac
+    done
+    [[ -n "$host" ]] || log_error "Usage : ai-local-tunnel setup <user@host | alias> [--ssh-port N] [-i KEY] [--no-chat]"
+    [[ "$host" == -* ]] && log_error "Argument inattendu : $host"
+    local resolved
+    resolved=$(resolve_ssh_target "$host")
+    if [[ "$host" != *"@"* && "$resolved" == "$host" ]]; then
+        log_error "Hôte invalide : '$host' (ni user@host ni alias SSH connu — voir ~/.ssh/config)"
+    fi
+
+    echo "=== ai-local-tunnel setup → $host ==="
+    if [[ "$host" != *"@"* ]]; then echo "  (alias SSH → $resolved)"; fi
+    echo ""
+
+    # 0. Detect the currently-running THINKING model (probe proxy env).
+    log_info "Détection du modèle local actif (thinking) ..."
+    if ! detect_active_thinking_model; then
+        return 1
+    fi
+    log_success "Modèle actif : $ACTIVE_WHICH → $ACTIVE_MODEL_ID (port $ACTIVE_PORT, ctx $ACTIVE_CTX, thinking ON)"
+    echo ""
+
+    # 1. Open the tunnel (reuse if already running).
+    open_tunnel_bg "$host" "$ssh_port" "$identity" || return 1
+    echo ""
+
+    # 2. Verify tunnel from remote (probe the ACTIVE model's port).
+    log_info "Vérification du tunnel depuis $host ..."
+    local health
+    health=$(remote_exec "$host" "curl -s --max-time 5 http://127.0.0.1:$ACTIVE_PORT/health" 2>/dev/null || true)
+    if [[ "$health" != *'"ok"'* ]]; then
+        log_error "Le tunnel ne répond pas sur le distant (health=$health). Vérifier sshd AllowTcpForwarding=yes et que le port $ACTIVE_PORT est libre côté distant."
+    fi
+    log_success "Tunnel OK : $host → 127.0.0.1:$ACTIVE_PORT ($health)"
+    echo ""
+
+    # 3. Check hermes is installed on remote + resolve the config file Hermes
+    #    ACTUALLY reads (may be a profile: ~/.hermes/profiles/<name>/config.yaml).
+    log_info "Détection d'Hermes sur $host ..."
+    local hermes_ok
+    hermes_ok=$(remote_exec "$host" "command -v hermes >/dev/null 2>&1 && echo yes || echo no" 2>/dev/null || echo no)
+    if [[ "$hermes_ok" != "yes" ]]; then
+        echo ""
+        log_warn "Hermes n'est pas dans le PATH sur $host. Installer d'abord :"
+        echo "  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
+        echo "  (puis se reconnecter en SSH pour que .bashrc recharge le PATH)"
+        log_error "Setup interrompu : installer Hermes sur $host puis relancer 'ai-local-tunnel setup $host'."
+    fi
+    local ver
+    ver=$(remote_exec "$host" "hermes --version 2>/dev/null | head -1" 2>/dev/null || echo "?")
+    log_success "Hermes trouvé sur $host ($ver)"
+
+    # Resolve the real config path. `hermes config path` is authoritative — it
+    # accounts for profiles, which override ~/.hermes/config.yaml.
+    local cfg_path
+    cfg_path=$(remote_exec "$host" "hermes config path 2>/dev/null | tail -1" 2>/dev/null | tr -d '[:space:]')
+    if [[ -z "$cfg_path" ]]; then
+        log_error "Impossible de résoudre le chemin de config Hermes sur $host ('hermes config path' a échoué)."
+    fi
+    if [[ "$cfg_path" != *"config.yaml" ]]; then
+        log_error "Chemin de config inattendu sur $host : $cfg_path"
+    fi
+    log_success "Config Hermes sur $host : $cfg_path"
+    echo ""
+
+    # 4. Backup that config + merge (model.default + custom_providers) into it.
+    log_info "Backup + merge de $cfg_path sur $host ..."
+    local merge_out
+    merge_out=$(remote_exec "$host" "cp \"$cfg_path\" \"$cfg_path.bak-\$(date +%Y%m%d-%H%M%S)\" && python3 - \"$cfg_path\" <<'PYEOF'
+$(remote_merge_script)
+PYEOF" 2>&1 || true)
+    if [[ "$merge_out" != *"merged"* ]]; then
+        log_error "Échec du merge sur $host : $merge_out"
+    fi
+    log_success "Config mergée sur $host (backup dans $cfg_path.bak-*)"
+    echo ""
+
+    # 5. YAML lint (of the real config path) + hermes doctor.
+    log_info "Validation YAML + hermes doctor sur $host ..."
+    local doc
+    doc=$(remote_exec "$host" "python3 -c 'import yaml; yaml.safe_load(open(\"$cfg_path\"))' && echo YAML_OK; hermes doctor 2>&1 | grep -i 'Unknown provider' || echo NO_UNKNOWN" 2>&1 || true)
+    if [[ "$doc" != *YAML_OK* ]]; then
+        log_error "YAML invalide sur $host : $doc"
+    fi
+    if [[ "$doc" == *Unknown* ]]; then
+        log_error "hermes doctor signale un 'Unknown provider' : $doc"
+    fi
+    log_success "YAML OK, pas d'Unknown provider"
+    echo ""
+
+    # 6. End-to-end chat test (against the active thinking model).
+    # bash 3.2 (macOS) has no ${var^^}; use tr for uppercase.
+    local ok_token="TUNNEL_OK_$(echo "$ACTIVE_WHICH" | tr '[:lower:]' '[:upper:]')"
+    if [[ "$skip_chat" == "1" ]]; then
+        log_info "Test chat skippé (--no-chat)."
+    else
+        log_info "Test chat end-to-end ($ACTIVE_WHICH via tunnel) ..."
+        local chat
+        chat=$(remote_exec "$host" "timeout 180 hermes chat -Q -q 'Reply with exactly the token ${ok_token} and nothing else.' 2>&1 | tail -5" 2>&1 || true)
+        if [[ "$chat" == *"$ok_token"* ]]; then
+            log_success "Chat end-to-end OK : le distant rejoint le $ACTIVE_WHICH du Mac via tunnel"
+        else
+            log_warn "Test chat sans succès (réponse : $chat)."
+            log_warn "Le tunnel + la config sont en place ; le modèle peut juste être lent au premier prompt. Relancer ou tester en interactif :"
+            echo "  ssh $host 'export PATH=$HOME/.hermes/hermes-agent/venv/bin:\$HOME/.local/bin:\$PATH; hermes --tui'"
+        fi
+    fi
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════════════"
+    echo "  Setup terminé pour $host"
+    echo "═══════════════════════════════════════════════════════════════════════"
+    log_info "Lancer Hermes en interactif sur $host :"
+    echo "  ssh $host  # puis : hermes --tui   (/model → ai-local-27b & ai-local-35b)"
+    log_info "Arrêter le tunnel : ai-local-tunnel stop $host"
+    log_info "Statut           : ai-local-tunnel status"
+}
+
+cmd_stop() {
+    local host="${1:-}"
+    [[ -n "$host" ]] || log_error "Usage : ai-local-tunnel stop <user@host | alias>"
+    local pid_file
+    pid_file="$(tunnel_pid_file "$host")"
+    local pid
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -z "$pid" || ! "$pid" =~ ^[0-9]+$ ]]; then
+        log_warn "Aucun tunnel enregistré vers $host."
+        # Fallback : tuer par pattern au cas où le pid file aurait disparu.
+        pkill -f "ssh -N .* -R .*$(host_slug "$host")" >/dev/null 2>&1 || true
+        return 0
+    fi
+    if kill -0 "$pid" >/dev/null 2>&1; then
+        kill "$pid" >/dev/null 2>&1 || true
+        for _ in {1..10}; do
+            kill -0 "$pid" >/dev/null 2>&1 || break
+            sleep 0.2
+        done
+        kill -9 "$pid" >/dev/null 2>&1 || true
+        log_success "Tunnel vers $host arrêté (PID $pid)."
+    else
+        log_warn "Tunnel vers $host déjà mort (PID $pid périmé)."
+    fi
+    rm -f "$pid_file"
+}
+
+cmd_status() {
+    echo "=== ai-local-tunnel status ==="
+    echo ""
+    local found=0
+    local pid_file
+    for pid_file in "$AI_LOCAL_RUN_DIR"/tunnel-*.pid; do
+        [[ -f "$pid_file" ]] || continue
+        local slug pid host
+        slug="$(basename "$pid_file" .pid)"
+        slug="${slug#tunnel-}"
+        pid="$(cat "$pid_file" 2>/dev/null || true)"
+        # Reconstruct a display host from the slug (best-effort; slug replaced @ too? no, only / : and space).
+        host="$slug"
+        if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" >/dev/null 2>&1; then
+            log_success "$host → PID $pid (actif)"
+            found=1
+        else
+            log_warn "$host → PID ${pid:-?} (mort — pid file périmé)"
+        fi
+    done
+    if [[ "$found" == "0" ]]; then
+        log_info "Aucun tunnel actif."
+    fi
+    echo ""
+    log_info "Modèles locaux :"
+    if is_service_running "$LLAMA_PROXY_PORT" "/health"; then
+        log_success "  27B up sur port $LLAMA_PROXY_PORT ($MODEL_27B_ID)"
+    else
+        log_warn "  27B down (port $LLAMA_PROXY_PORT)"
+    fi
+    if is_service_running "$PROXY_35B_PORT" "/health"; then
+        log_success "  35B up sur port $PROXY_35B_PORT ($MODEL_35B_ID)"
+    else
+        log_warn "  35B down (port $PROXY_35B_PORT)"
+    fi
+}
+
+cmd_help() {
+    cat << EOF
+ai-local-tunnel — Reverse SSH tunnel : expose les modèles Qwen du Mac à un
+Hermes distant (serveur sans GPU). Le distant voit les endpoints comme locaux.
+
+Usage :
+  ai-local-tunnel <user@host | alias> [options]  Ouvrir un tunnel + afficher la config
+  ai-local-tunnel setup <user@host | alias> [opts]  Tout faire : tunnel + config Hermes distant + validation
+  ai-local-tunnel stop <user@host | alias>        Fermer le tunnel
+  ai-local-tunnel status                  Tunnels actifs + état des modèles locaux
+  ai-local-tunnel help                    Cette aide
+
+Options (start) :
+  --fg              Foreground (Ctrl+C pour fermer) ; défaut : background
+  --ssh-port N      Port SSH distant (défaut : 22)
+  -i, --identity K  Clé SSH à utiliser
+
+Options (setup) :
+  --ssh-port N      Port SSH distant (défaut : 22)
+  -i, --identity K  Clé SSH à utiliser
+  --no-chat         Skipper le test chat end-to-end (juste tunnel + config + doctor)
+
+Ports forwardés (lus depuis config/.qwen-local.conf) :
+  27B : $LLAMA_PROXY_PORT    (model : $MODEL_27B_ID)
+  35B : $PROXY_35B_PORT   (model : $MODEL_35B_ID)
+
+Notes :
+  - Les deux ports sont toujours forwardés ; avec SINGLE_MODEL_MODE=1 un seul
+    modèle tourne à la fois sur le Mac, donc un seul répond sur le distant.
+  - Penser à lancer le stack en mode thinking sur le Mac :
+      ai-local 27b-thinking   ou   ai-local 35b-thinking
+  - PID files : $AI_LOCAL_RUN_DIR/tunnel-<host>.pid
+  - Logs      : $AI_LOCAL_LOG_DIR/tunnel-<host>.log
+EOF
+}
+
+# ---- Dispatch ----
+case "${1:-help}" in
+    setup)   shift; cmd_setup "$@" ;;
+    stop)    shift; cmd_stop "$@" ;;
+    status)  cmd_status ;;
+    help|-h|--help) cmd_help ;;
+    *)       cmd_start "$@" ;;
+esac
