@@ -263,7 +263,7 @@ Le Hermes sur le OVH ne fait que des appels HTTP vers `127.0.0.1` ; le tunnel SS
 
 ### Setup en une commande : `ai-local-tunnel setup`
 
-Le script `bin/ai-local-tunnel` automatise **toute** la procédure côté distant en une seule commande. Il détecte d'abord **le modèle actuellement lancé sur le Mac** (27B ou 35B) en lisant l'environnement du proxy (`AI_LOCAL_FORCE_THINK`), puis : ouverture du tunnel (réutilisé s'il tourne déjà), vérification depuis le distant, détection d'Hermes, backup + merge de `~/.hermes/config.yaml` (le `model.default` pointe vers le modèle détecté, `custom_providers:` déclare les deux — **idempotent**), lint YAML + `hermes doctor`, et test chat end-to-end (le token attendu reflète le modèle : `TUNNEL_OK_27B` ou `TUNNEL_OK_35B`).
+Le script `bin/ai-local-tunnel` automatise **toute** la procédure côté distant en une seule commande. Il détecte d'abord **le modèle actuellement lancé sur le Mac** (27B ou 35B) en lisant l'environnement du proxy (`AI_LOCAL_FORCE_THINK`), puis : ouverture du tunnel (réutilisé s'il tourne déjà), vérification depuis le distant, détection d'Hermes, **résolution du fichier de config que Hermes lit réellement** via `hermes config path` (tient compte des profils — voir ci-dessous), backup + merge de ce fichier (le `model.default` pointe vers le modèle détecté, `custom_providers:` déclare les deux — **idempotent**), lint YAML + `hermes doctor`, et test chat end-to-end (le token attendu reflète le modèle : `TUNNEL_OK_27B` ou `TUNNEL_OK_35B`).
 
 Le script **n'exige pas un modèle précis** : il accepte n'importe quel modèle local qui tourne, **à condition qu'il soit en thinking** (`AI_LOCAL_FORCE_THINK=1`). Si un modèle tourne en no-think, il aborte avec un message clair (« Le 35B tourne mais en mode NO-THINK… relancer en thinking ») — car sans le suffixe `-thinking`, le proxy force no-think + strip les blocs `<think>`, ce qui n'a pas d'intérêt ici.
 
@@ -315,21 +315,22 @@ Si `setup` échoue à une étape, voici exactement ce qu'il fait, pour debug à 
 1. **Tunnel** : `ssh -N -p 22 -R 8081:127.0.0.1:8081 -R 11435:127.0.0.1:11435 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes ovh-eriador` (background).
 2. **Vérif tunnel** : `ssh ovh-eriador 'curl -s --max-time 5 http://127.0.0.1:8081/health'` → doit renvoyer `{"status":"ok"}`.
 3. **Hermes dans le PATH** : en SSH non-interactif `.bashrc` n'est pas sourcé, donc `command -v hermes` échoue. Le script force `export PATH="$HOME/.hermes/hermes-agent/venv/bin:$HOME/.local/bin:$PATH"`. À la main : `ssh ovh-eriador 'export PATH=$HOME/.hermes/hermes-agent/venv/bin:$HOME/.local/bin:$PATH; hermes --version'`.
-4. **Backup + merge config** : `cp ~/.hermes/config.yaml ~/.hermes/config.yaml.bak-$(date +%Y%m%d-%H%M%S)` puis un script Python remplace le block `model:` et ajoute/rafraîchit `custom_providers:` (préserve tout le reste du fichier : toolsets, agent, memory…).
-5. **Validation** : `python3 -c 'import yaml,os; yaml.safe_load(open(os.path.expanduser("~/.hermes/config.yaml")))'` + `hermes doctor | grep -i 'Unknown provider'` (ne doit rien sortir).
-6. **Test chat** : `hermes chat -Q -q 'Reply with exactly the token TUNNEL_OK_27B and nothing else.'` (one-shot, `-Q` supprime le banner, `-q` passe la query). Doit renvoyer `TUNNEL_OK_27B`.
+4. **Résoudre le fichier de config** : `hermes config path` (authoritatif). Peut renvoyer `~/.hermes/config.yaml` (pas de profil) **ou** `~/.hermes/profiles/<name>/config.yaml` (un profil override la racine). Ne **pas** hardcoder `~/.hermes/config.yaml` — sur une install avec profil, le merge irait dans le mauvais fichier et Hermes continuerait à router vers le cloud (HTTP 429). À la main : `ssh ovh-eriador 'export PATH=...; hermes config path'`.
+5. **Backup + merge config** : `cp "$CFG" "$CFG.bak-$(date +%Y%m%d-%H%M%S)"` (où `$CFG` = sortie de `hermes config path`) puis un script Python remplace le block `model:` et ajoute/rafraîchit `custom_providers:` (préserve tout le reste du fichier : toolsets, agent, memory…).
+6. **Validation** : `python3 -c 'import yaml; yaml.safe_load(open("$CFG"))'` + `hermes doctor | grep -i 'Unknown provider'` (ne doit rien sortir).
+7. **Test chat** : `hermes chat -Q -q 'Reply with exactly the token TUNNEL_OK_27B and nothing else.'` (one-shot, `-Q` supprime le banner, `-q` passe la query). Doit renvoyer `TUNNEL_OK_27B`. ⚠️ Si la réponse est une `HTTP 429` d'un provider cloud (zai/glm…), c'est que le merge est allé dans le mauvais fichier → re-vérifier `hermes config path`.
 
 ### Config Hermes distante (résultat du merge)
 
-Le setup produit dans `~/.hermes/config.yaml` sur le distant (identique à la config Mac, puisque via le tunnel `127.0.0.1:8081`/`11435` résolvent vers le Mac) :
+Le setup produit, dans le fichier renvoyé par `hermes config path` sur le distant (`~/.hermes/config.yaml` si pas de profil, ou `~/.hermes/profiles/<name>/config.yaml` sinon), le block suivant (identique à la config Mac, puisque via le tunnel `127.0.0.1:8081`/`11435` résolvent vers le Mac). Exemple avec le 35B actif :
 
 ```yaml
 model:
-  default: Qwen3.6-27B-UD-Q4_K_XL.gguf
-  provider: custom:ai-local-27b
-  base_url: http://127.0.0.1:8081/v1
+  default: Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+  provider: custom:ai-local-35b
+  base_url: http://127.0.0.1:11435/v1
   api_key: sk-local-no-auth
-  context_length: 65536
+  context_length: 131072
 
 custom_providers:
   - name: ai-local-35b
@@ -346,15 +347,18 @@ custom_providers:
         context_length: 65536
 ```
 
+(Avec le 27B actif, `model.default`/`provider`/`base_url` pointerait vers `Qwen3.6-27B-UD-Q4_K_XL.gguf` / `custom:ai-local-27b` / `8081`. La liste `custom_providers:` est la même dans les deux cas — les deux endpoints sont toujours déclarés.)
+
 ### Points d'attention
 
-- **Prérequis absolu** : un modèle **thinking** doit tourner sur le Mac avant le setup (`setup` aborte si le 27B est down). Sans le suffixe `-thinking`, le proxy force no-think + strip les blocs `<think>` — le thinking se gère côté Mac, pas dans la config Hermes distante.
+- **Prérequis absolu** : un modèle **thinking** doit tourner sur le Mac avant le setup (`setup` détecte le modèle actif et aborte s'il n'y en a aucun en thinking). Sans le suffixe `-thinking`, le proxy force no-think + strip les blocs `<think>` — le thinking se gère côté Mac, pas dans la config Hermes distante.
 - **Single-model mode sur le Mac** : `AI_LOCAL_SINGLE_MODEL_MODE=1` (voir `config/.qwen-local.conf`) signifie qu'un seul des deux modèles (27B ou 35B) tourne à la fois sur le MacBook. Donc tous les Hermes distants qui pointent vers le Mac partagent le **même** modèle (celui lancé avec `ai-local 27b-thinking` ou `35b-thinking`). Impossible d'avoir un OVH sur le 27B et l'autre sur le 35B simultanément.
 - **Le Mac doit rester allumé** + le tunnel ouvert pendant toute la session OVH. Fermer le laptop ou perdre le réseau → les Hermes distants perdent leur modèle. `ai-local-tunnel status` pour vérifier.
 - **Latence** : le streaming de tokens fait un aller-retour SSH par chunk. Acceptable pour de l'agentic, mais ressenti vs un appel local direct. Sur une fibre correcte c'est <50ms, donc ok pour de l'agent (pas pour du chat temps réel fluide).
 - **`sshd_config` côté OVH** : par défaut `AllowTcpForwarding yes` et `GatewayPorts no` — c'est exactement ce qu'il faut (le `-R` bind sur le loopback du OVH, pas d'exposition publique). Si `AllowTcpForwarding no`, le passer à `yes` dans `/etc/ssh/sshd_config` et `sudo systemctl reload sshd`.
 - **Sécurité** : le tunnel ne met le modèle à disposition que sur `127.0.0.1` du OVH — pas exposé à internet. Tant qu'on ne met pas `GatewayPorts yes` (à éviter), c'est limité aux utilisateurs connectés en SSH sur le OVH.
 - **Switch 27B ↔ 35B** : démarrer l'autre stack sur le Mac (`ai-local 35b-thinking`), puis en session Hermes distante : `/model custom:ai-local-35b:Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf` (le tunnel forward déjà le port 11435).
+- **⚠️ Profils Hermes** : une install avec profil (`~/.hermes/profiles/<name>/config.yaml`) **override** `~/.hermes/config.yaml` — Hermes lit le profil, pas la racine. Le setup résout le bon fichier via `hermes config path`. Si tu édites la config à la main, vérifie d'abord : `hermes config path`. Symptôme typique d'un merge dans le mauvais fichier : `hermes chat` renvoie une `HTTP 429` d'un provider cloud (zai/glm) alors que le tunnel et le `curl` local fonctionnent.
 
 ### Tunnel persistant (optionnel)
 
