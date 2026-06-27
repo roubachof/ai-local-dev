@@ -25,6 +25,22 @@ AI_LOCAL_CONFIG_VARS=(
     AI_LOCAL_SINGLE_MODEL_MODE AI_LOCAL_STATE_DIR AI_LOCAL_LOG_DIR AI_LOCAL_RUN_DIR
 )
 
+# Capture which config vars are inherited from the environment BEFORE the
+# built-in ${VAR:-default} assignments below run. load_qwen_config restores only
+# these, so ad-hoc env overrides (e.g. `LLAMA_MTP=1 ai-local 35b`) win over the
+# conf file, while built-in defaults do NOT clobber conf-file values. Without
+# this, every ${VAR:-default} would mark the var as "set" and the snapshot/restore
+# in load_qwen_config would silently override the conf file with the defaults
+# (env > conf > default would instead behave as (env|default) > conf).
+AI_LOCAL_ENV_INHERITED=()
+for _v in "${AI_LOCAL_CONFIG_VARS[@]}"; do
+    if [[ -n "${!_v+set}" ]]; then
+        AI_LOCAL_ENV_INHERITED+=("$_v")
+        printf -v "_ai_local_env_val_$_v" '%s' "${!_v}"
+    fi
+done
+unset _v
+
 # ---- Port defaults ----
 LLAMA_PORT="${LLAMA_PORT:-8080}"              # 27B llama-server
 LLAMA_35B_PORT="${LLAMA_35B_PORT:-8083}"       # 35B llama-server
@@ -96,16 +112,27 @@ load_qwen_config() {
     local -a _var_names=("${@:-${AI_LOCAL_CONFIG_VARS[@]}}")
     local -a _env_names=()
     local _saved_name _saved_val
+    # Capture only vars that were INHERITED from the environment. The set of
+    # env-inherited vars (and their original values) was captured at source time
+    # in AI_LOCAL_ENV_INHERITED / _ai_local_env_val_<name>, BEFORE the built-in
+    # ${VAR:-default} assignments ran. Restoring only those gives precedence
+    # env > conf > built-in default; otherwise every default would masquerade as
+    # an env override and silently clobber conf-file values.
+    local _is_env _e
     for _saved_name in "${_var_names[@]}"; do
-        # Capture only if the var is present in the environment (inherited/exported).
-        if [[ -n "${!_saved_name+set}" ]]; then
-            _saved_val="${!_saved_name}"
+        _is_env=0
+        for _e in "${AI_LOCAL_ENV_INHERITED[@]:-}"; do
+            [[ -z "$_e" ]] && continue
+            [[ "$_e" == "$_saved_name" ]] && { _is_env=1; break; }
+        done
+        if [[ "$_is_env" == "1" ]]; then
             _env_names+=("$_saved_name")
-            # Stash the value in a uniquely-named var for restore. Use printf %q
-            # to safely quote the value so eval restores it verbatim.
-            printf -v "_env_val_$_saved_name" '%s' "$_saved_val"
+            # Copy the original env value (captured before defaults) for restore.
+            local _src="_ai_local_env_val_$_saved_name"
+            printf -v "_env_val_$_saved_name" '%s' "${!_src}"
         fi
     done
+    unset _is_env _e
 
     if [[ -f "$QWEN_LOCAL_CONF" ]]; then
         # shellcheck disable=SC1090
@@ -119,8 +146,9 @@ load_qwen_config() {
     # Re-apply env-inherited values so they win over conf defaults.
     for _saved_name in "${_env_names[@]:-}"; do
         [[ -n "$_saved_name" ]] || continue
-        eval "$_saved_name=\"\${_env_val_$_saved_name}\""
-        unset "_env_val_$_saved_name"
+        local _src="_env_val_$_saved_name"
+        printf -v "$_saved_name" '%s' "${!_src}"
+        unset "$_src"
     done
 }
 
