@@ -1,15 +1,16 @@
 # Coding Agents
 
-Agents de coding compatibles avec la stack `ai-local-dev` (proxy OpenAI-compatible sur `http://127.0.0.1:8081/v1` pour le 27B et `http://127.0.0.1:11435/v1` pour le 35B). Ce document recense les agents testés, le retour d'expérience, et la configuration de l'agent retenu (Pi).
+Agents de coding compatibles avec la stack `ai-local-dev` (proxy OpenAI-compatible sur `http://127.0.0.1:8081/v1` pour le 27B et `http://127.0.0.1:11435/v1` pour le 35B). Ce document recense les agents testés, le retour d'expérience, et la configuration des agents retenus (Pi, OpenCode, Hermes).
 
 ## Agents testés
 
 | Agent | Éditeur / licence | Langue | Modèles locaux | Verdict (juin 2026) |
 |---|---|---|---|---|
 | **Pi** (`@earendil-works/pi-coding-agent`) | earendil-works / MIT | TypeScript | Oui (OpenAI-compatible) | ✅ **Retenu** — le mieux pour l'instant |
+| **OpenCode** (`sst/opencode`) | sst / Apache-2.0 | TypeScript (Bun) | Oui (OpenAI-compatible via `@ai-sdk/openai-compatible`) | ✅ **Retenu** — reasoning surfaced via `interleaved` |
 | **Goose** | Block → AAIF (Linux Foundation) / Apache-2.0 | Rust | Oui (Ollama, LM Studio, llama.cpp, endpoint custom) | Testé, correct mais pas retenu |
 | **Qwen Code** (`@qwen-code/qwen-code`) | QwenLM (Alibaba) / Apache-2.0 | TypeScript | Oui (Ollama, vLLM, endpoint OpenAI-compatible) | Testé, correct mais pas retenu |
-| **Hermes** (`NousResearch/hermes-agent`) | Nous Research / MIT | Python | Oui (OpenAI-compatible, Ollama, vLLM, llama.cpp) | 🔜 À tester — config préparée pour la stack (voir ci-dessous) |
+| **Hermes** (`NousResearch/hermes-agent`) | Nous Research / MIT | Python | Oui (OpenAI-compatible, Ollama, vLLM, llama.cpp) | ✅ Configuré et testé (local + distant via tunnel SSH) |
 | **Warp** (option modèle local) | Warp / propriétaire | Rust | Non réellement | ⚠️ Pas implémenté pour le local — voir ci-dessous |
 
 ## Retour d'expérience
@@ -24,9 +25,12 @@ Agent open-source robuste (Rust, ~50K★), désormais sous l'Agentic AI Foundati
 Agent terminal open-source d'Alibaba (~25K★), optimisé pour les modèles Qwen mais multi-protocole (OpenAI / Anthropic / Gemini + tout endpoint OpenAI-compatible local). Config via `~/.qwen/settings.json`. Bonne intégration Qwen (notamment `enable_thinking` natif), mais pour l'instant Pi suffit et reste plus léger.
 
 ### Hermes
-Agent open-source de Nous Research (~200K★, Python, MIT). Particularité : boucle d'apprentissage intégrée (création de skills autonomes, mémoire persistante, modélisation utilisateur cross-session), multi-plateformes (CLI, Telegram, Discord, Slack, WhatsApp…), six backends terminal (local, Docker, SSH, Modal, Daytona, Singularity), et support first-class des endpoints OpenAI-compatibles locaux (llama.cpp, Ollama, vLLM) — y compris sans API key (PR #38572 merged juin 2026). Config dans `~/.hermes/config.yaml` (settings) + `~/.hermes/.env` (secrets). **Pas encore testé** avec la stack ai-local-dev — config préparée ci-dessous pour A/B-tester avec Pi.
+Agent open-source de Nous Research (~200K★, Python, MIT). Particularité : boucle d'apprentissage intégrée (création de skills autonomes, mémoire persistante, modélisation utilisateur cross-session), multi-plateformes (CLI, Telegram, Discord, Slack, WhatsApp…), six backends terminal (local, Docker, SSH, Modal, Daytona, Singularity), et support first-class des endpoints OpenAI-compatibles locaux (llama.cpp, Ollama, vLLM) — y compris sans API key (PR #38572 merged juin 2026). Config dans `~/.hermes/config.yaml` (settings) + `~/.hermes/.env` (secrets). **Configuré et testé** avec la stack ai-local-dev (local + deux serveurs distants via reverse SSH tunnel — voir [Hermes distant](#hermes-distant-via-reverse-ssh-tunnel)).
 
-Contrainte notoire : Hermes exige **64K tokens de contexte minimum** (rejet au startup sinon). Le 27B (ctx 64K) passe juste, le 35B (ctx 128K) est confortable.
+Contrainte notoire : Hermes exige **64K tokens de contexte minimum** (rejet au startup sinon). Les deux modèles passent confortablement maintenant qu'ils tournent à 128K (voir [Taille de contexte](#taille-de-contexte)) — le 27B était à 64K jusqu'en juin 2026 (juste au minimum), il est monté à 128K (natif, son `n_ctx_train` est 256K).
+
+### OpenCode
+Agent terminal open-source de sst (~TypeScript/Bun, Apache-2.0). Multi-provider via le SDK Vercel AI (`@ai-sdk/openai-compatible` pour les endpoints OpenAI-compatibles locaux). Config dans `~/.config/opencode/config.json` (providers/agents) + `~/.config/opencode/opencode.json` (sélecteur de défaut). Particularité utile pour le local : le schéma modèle supporte `reasoning: true` + `interleaved: { field: "reasoning_content" }`, qui dit à OpenCode que le reasoning arrive dans le champ `reasoning_content` (convention DeepSeek/OpenRouter — exactement ce que le proxy ai-local-dev renvoie en thinking). Sans ça, le reasoning est ignoré. Config détaillée ci-dessous ([Configuration OpenCode](#configuration-opencode)).
 
 ### Warp (option modèle local)
 Warp expose une option « custom inference endpoint » (Settings → inference endpoint), mais **à date de juin 2026, l'endpoint local n'est pas vraiment implémenté** :
@@ -39,7 +43,15 @@ Références :
 - Doc officielle : https://docs.warp.dev/agent-platform/inference/custom-inference-endpoint/
 - Issues ouvertes (suivi du gap local) : `warpdotdev/warp#11589`, `#12142`, `#9303`, `#9368`
 
-En attendant que Warp supporte nativement le local, on reste sur Pi pour l'agent de coding local.
+En attendant que Warp supporte nativement le local, on reste sur Pi / OpenCode / Hermes pour l'agent de coding local.
+
+## Taille de contexte
+
+Les deux modèles Qwen tournent à **128K (131072 tokens)** de contexte, qui est **natif** pour les deux (le 27B a un `n_ctx_train` de 256K, le 35B idem) — donc **zéro rope-scaling, zéro perte de qualité**. Ça tient sur le M3 Max 48GB : le 35B (23G de poids) tourne à 128K depuis le début, et le 27B (18G de poids, même classe de KV cache hybride) a été monté de 64K à 128K en juin 2026 (wired ~28GB, compressed 0GB — pas de pression swap).
+
+⚠️ Historiquement (jusqu'en juin 2026), le 27B tournait à **64K** pour rester conservateur — c'est désormais obsolète. Tous les exemples de config ci-dessous (Pi, OpenCode, Hermes) reflètent le 128K. Si tu rencontres une config à `65536` pour le 27B, c'est un reliquat à mettre à 131072.
+
+Note : le 35B ne pourrait pas monter à 256K (son `n_ctx_train`) sur 48GB — les 23G de poids + le KV cache à 256K dépasseraient la RAM. 128K est le sweet spot pour les deux.
 
 ## Configuration Pi
 
@@ -50,7 +62,7 @@ Pi charge les providers custom depuis `~/.pi/agent/models.json` (rechargé à ch
 Deux providers pointant vers les proxies no-think de la stack (qui gèrent `enable_thinking` / `preserve_thinking` côté serveur via `chat_template_kwargs`) :
 
 - `ai-local-35b` → `http://127.0.0.1:11435/v1` (35B-A3B, 128k ctx, thinking)
-- `ai-local-27b` → `http://127.0.0.1:8081/v1` (27B dense, 64k ctx, thinking)
+- `ai-local-27b` → `http://127.0.0.1:8081/v1` (27B dense, 128k ctx, thinking)
 
 ### Exemple `~/.pi/agent/models.json`
 
@@ -94,7 +106,7 @@ Deux providers pointant vers les proxies no-think de la stack (qui gèrent `enab
           "name": "Qwen3.6-27B (local, thinking)",
           "reasoning": true,
           "input": ["text"],
-          "contextWindow": 65536,
+          "contextWindow": 131072,
           "maxTokens": 32000,
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
           "thinkingLevelMap": { "off": null }
@@ -137,6 +149,142 @@ Deux providers pointant vers les proxies no-think de la stack (qui gèrent `enab
 - Doc models : https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md
 - Doc settings : https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md
 
+## Configuration OpenCode
+
+OpenCode (CLI `opencode`) se configure dans `~/.config/opencode/config.json` (providers + agents) et `~/.config/opencode/opencode.json` (sélecteur de modèle par défaut, format `provider/model`). Les providers custom utilisent le SDK Vercel AI via `"npm": "@ai-sdk/openai-compatible"` avec un `"options.baseURL"`.
+
+### Providers déclarés pour la stack ai-local-dev
+
+Deux providers, comme pour Pi/Hermes (ports proxy 8081/11435) :
+
+- `ai-local-35b` → `http://127.0.0.1:11435/v1` (35B-A3B, 128k ctx, thinking)
+- `ai-local-27b` → `http://127.0.0.1:8081/v1` (27B dense, 128k ctx, thinking)
+
+### `~/.config/opencode/config.json`
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "ai-local-35b": {
+      "name": "Qwen 35B-A3B (local, thinking)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:11435/v1",
+        "apiKey": "sk-local-no-auth",
+        "timeout": 1800000
+      },
+      "models": {
+        "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf": {
+          "name": "Qwen3.6-35B-A3B (local, thinking)",
+          "reasoning": true,
+          "interleaved": { "field": "reasoning_content" },
+          "tool_call": true,
+          "temperature": true,
+          "attachment": false,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 131072, "output": 32000 }
+        }
+      }
+    },
+    "ai-local-27b": {
+      "name": "Qwen 27B (local, thinking)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:8081/v1",
+        "apiKey": "sk-local-no-auth",
+        "timeout": 1800000
+      },
+      "models": {
+        "Qwen3.6-27B-UD-Q4_K_XL.gguf": {
+          "name": "Qwen3.6-27B (local, thinking)",
+          "reasoning": true,
+          "interleaved": { "field": "reasoning_content" },
+          "tool_call": true,
+          "temperature": true,
+          "attachment": false,
+          "cost": { "input": 0, "output": 0 },
+          "limit": { "context": 131072, "output": 32000 }
+        }
+      }
+    }
+  },
+  "agent": {
+    "default": {
+      "provider": "ai-local-35b",
+      "model": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+    }
+  }
+}
+```
+
+### `~/.config/opencode/opencode.json` (défaut au niveau global)
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ai-local-35b/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+}
+```
+
+### Le détail qui fait marcher le reasoning : `interleaved`
+
+C'est la clé pour OpenCode. Par défaut, le SDK Vercel AI lit `content` et ignore le `reasoning_content` que le proxy ai-local-dev renvoie en thinking. Le champ modèle :
+
+```json
+"reasoning": true,
+"interleaved": { "field": "reasoning_content" }
+```
+
+dit à OpenCode : « ce modèle fait du reasoning, et il arrive dans le champ `reasoning_content` des chunks de réponse ». Sans ça, le thinking est généré côté serveur mais **jamais affiché** côté OpenCode (le modèle « réfléchit » en silencieux). Le champ accepté par le schéma est `"reasoning"`, `"reasoning_content"`, ou `"reasoning_details"` — c'est `reasoning_content` qu'il faut pour le proxy (convention DeepSeek/OpenRouter, ce que llama-server renvoie avec `--reasoning-format deepseek`).
+
+### Vérifier + tester
+
+```bash
+# 1. Démarrer le stack local voulu (PENSER au suffixe -thinking !)
+ai-local 35b-thinking      # ou 27b-thinking
+
+# 2. Vérifier que le proxy répond
+curl -s http://127.0.0.1:11435/health    # -> {"status":"ok"}
+
+# 3. OpenCode doit lister les deux providers/models
+opencode models | grep ai-local
+#   ai-local-27b/Qwen3.6-27B-UD-Q4_K_XL.gguf
+#   ai-local-35b/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf
+
+# 4. Test one-shot end-to-end (doit renvoyer OPENCODE_OK_35B)
+opencode run -m ai-local-35b/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf "Reply with exactly the token OPENCODE_OK_35B and nothing else."
+
+# 5. Session interactive (le sélecteur /models liste les deux)
+opencode
+#   puis /models  → ai-local-35b / ai-local-27b
+```
+
+### Switch entre 27B et 35B
+
+```bash
+# En session : /models puis sélection. En one-shot :
+opencode run -m ai-local-27b/Qwen3.6-27B-UD-Q4_K_XL.gguf "..."
+
+# Changer le défaut (nouvelles sessions) : éditer ~/.config/opencode/opencode.json
+#   "model": "ai-local-27b/Qwen3.6-27B-UD-Q4_K_XL.gguf"
+```
+
+### Notes importantes
+
+- **⚠️ Thinking ON = obligation de démarrer avec `-thinking`** : même règle que Pi/Hermes — le thinking se gère côté `ai-local-dev` (suffixe `-thinking`), pas dans la config OpenCode. `reasoning: true` + `interleaved` dit juste à OpenCode *comment afficher* le reasoning ; si le stack tourne en no-think, il n'y a rien à afficher (le proxy strip les blocs `<think>`).
+- **Un seul modèle à la fois** : `AI_LOCAL_SINGLE_MODEL_MODE=1` — démarrer le stack voulu **avant** de switcher dans OpenCode, sinon l'endpoint est down.
+- **`timeout: 1800000`** (30 min) : les endpoints locaux peuvent être lents sur long context + thinking ; OpenCode default timeout est court. Hermes le relâche automatiquement, OpenCode non — d'où la valeur explicite.
+- **`apiKey`** : `sk-local-no-auth` (la stack n'authentifie, convention partagée avec Pi/Hermes).
+- **Model id** : le basename du GGUF (`Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf`), pas le chemin complet que `/v1/models` renvoie — l'endpoint de chat l'accepte.
+- **⚠️ Ne pas pointer sur le port llama-server brut (8080)** : une ancienne config OpenCode avait `llama27b-reasoning` sur `http://127.0.0.1:8080/v1` pour « avoir le reasoning » (contournement de l'ancien proxy no-think). C'est obsolète et cassé — le reasoning se gère maintenant via le suffixe `-thinking` **sur le port proxy** (8081/11435), pas en court-circuitant le proxy.
+
+### Références OpenCode
+
+- Repo + doc : https://github.com/sst/opencode
+- Schéma de config : https://opencode.ai/config.json
+- SDK provider : `@ai-sdk/openai-compatible` (https://ai-sdk.dev/providers/ai-sdk-providers/openai-compatible)
+
 ## Configuration Hermes
 
 Hermes se configure dans `~/.hermes/config.yaml`. Pour les endpoints locaux, le schéma officiel est **`custom_providers:` (une liste)** — chaque entrée a `name`, `base_url`, `api_mode`, et un sous-dict `models`. C'est ce que le model picker CLI/TUI lit pour afficher les groupes sélectionnables.
@@ -178,7 +326,7 @@ custom_providers:
     api_mode: chat_completions
     models:
       Qwen3.6-27B-UD-Q4_K_XL.gguf:
-        context_length: 65536           # pile le minimum 64K imposé par Hermes
+        context_length: 131072          # 128K natif (n_ctx_train = 256K)
 ```
 
 ### Appliquer la config (depuis le terminal, hors session Hermes)
@@ -344,7 +492,7 @@ custom_providers:
     api_mode: chat_completions
     models:
       Qwen3.6-27B-UD-Q4_K_XL.gguf:
-        context_length: 65536
+        context_length: 131072
 ```
 
 (Avec le 27B actif, `model.default`/`provider`/`base_url` pointerait vers `Qwen3.6-27B-UD-Q4_K_XL.gguf` / `custom:ai-local-27b` / `8081`. La liste `custom_providers:` est la même dans les deux cas — les deux endpoints sont toujours déclarés.)
