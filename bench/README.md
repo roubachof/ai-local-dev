@@ -47,6 +47,60 @@ Options: `--url` (default `http://127.0.0.1:8081/v1` — use `11435/v1` for the 
 proxy), `--label`, `--max-tokens` (default 192), `--model` (default `qwen`).
 Results are written to `bench/results/bench_<label>.json`.
 
+## Testing the n-gram spec-decode axis
+
+`bench_mtp.py` itself is spec-agnostic — it just hits the proxy. The spec-decode
+backend is chosen at stack launch time via `LLAMA_SPEC_TYPE` (default
+`draft-mtp`), gated by `LLAMA_MTP`. llama.cpp build 9750 supports a
+comma-separated list: `draft-mtp,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache`.
+The bench auto-records which backends actually ran by scraping the
+`statistics <backend>:` line from the `llama-server` log, so the JSON output is
+self-describing — check the `draft_acceptance.spec_types` field to confirm the
+config you intended actually ran.
+
+n-gram modes need no MTP head and work with any GGUF; they shine on repetitive /
+structured output (code, reasoning that repeats its thinking in the answer).
+
+```bash
+# Baseline (draft-mtp) — same as the measured runs above
+LLAMA_MTP=1 ai-local 27b
+python3 bench/bench_mtp.py --label 27b-spec-draft-mtp
+ai-local stop 27b
+
+# ngram-mod only (hash-pool lookup, ~16 MB, shared across slots)
+LLAMA_MTP=1 LLAMA_SPEC_TYPE=ngram-mod ai-local 27b
+python3 bench/bench_mtp.py --label 27b-spec-ngram-mod
+ai-local stop 27b
+
+# ngram-map-k4v ("Key-4-Values": 4 m-gram values per n-gram key). Try the
+# Reddit k4v96 tuning (size-m=96) vs the llama.cpp default (size-m=48).
+LLAMA_MTP=1 LLAMA_SPEC_TYPE=ngram-map-k4v \
+    LLAMA_SPEC_NGRAM_MAP_K4V_SIZE_N=16 LLAMA_SPEC_NGRAM_MAP_K4V_SIZE_M=96 ai-local 27b
+python3 bench/bench_mtp.py --label 27b-spec-ngram-map-k4v-k4v96
+ai-local stop 27b
+
+# Combined draft-mtp + ngram-mod + ngram-map-k4v (ggerganov's combined recipe,
+# PR #23269). --spec-draft-n-max=3 is emitted automatically because draft-mtp
+# is in the list; LLAMA_SPEC_DRAFT_P_MIN=0.0 matches the upstream recipe.
+LLAMA_MTP=1 LLAMA_SPEC_TYPE=draft-mtp,ngram-mod,ngram-map-k4v \
+    LLAMA_SPEC_DRAFT_P_MIN=0.0 \
+    LLAMA_SPEC_NGRAM_MOD_N_MATCH=24 LLAMA_SPEC_NGRAM_MOD_N_MIN=48 LLAMA_SPEC_NGRAM_MOD_N_MAX=64 \
+    LLAMA_SPEC_NGRAM_MAP_K4V_SIZE_N=16 LLAMA_SPEC_NGRAM_MAP_K4V_SIZE_M=24 \
+    LLAMA_SPEC_NGRAM_MAP_K4V_MIN_HITS=1 ai-local 27b
+python3 bench/bench_mtp.py --label 27b-spec-combined
+ai-local stop 27b
+```
+
+Caveats:
+- The ~7x ngram-map-k4v gains reported on r/LocalLLM were on RTX 5090 (CUDA).
+  On Apple Silicon/Metal the acceptance and verification cost differ — there is
+  no guarantee n-gram beats draft-mtp here. Benchmark before trusting any win.
+- `ngram-map-k4v` = Key-4-Values (4 m-gram values per n-gram key), NOT a KV-cache
+  format. No need to change `LLAMA_CACHE_TYPE_K`.
+- The 8-prompt suite mixes code, prose, and math; n-gram modes help most on
+  repetitive output, so per-prompt variance will be high — read the per-prompt
+  `tok/s` in the JSON, not just the aggregate.
+
 ## Results: Apple M3 Max (48 GB), llama.cpp build 9750, Q4_K_XL
 
 Aggregate tok/s = `sum(completion_tokens) / sum(wall_s)` across the 8-prompt suite.

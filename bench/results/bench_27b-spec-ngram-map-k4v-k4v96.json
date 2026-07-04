@@ -1,0 +1,67 @@
+{
+  "label": "27b-spec-ngram-map-k4v-k4v96",
+  "results": [
+    {
+      "wall_s": 13.98,
+      "completion_tokens": 192,
+      "prompt_tokens": 31,
+      "tok_s": 13.73,
+      "name": "code_python"
+    },
+    {
+      "wall_s": 8.82,
+      "completion_tokens": 119,
+      "prompt_tokens": 29,
+      "tok_s": 13.49,
+      "name": "code_cpp"
+    },
+    {
+      "wall_s": 13.96,
+      "completion_tokens": 192,
+      "prompt_tokens": 45,
+      "tok_s": 13.75,
+      "name": "explain_concept"
+    },
+    {
+      "wall_s": 8.47,
+      "completion_tokens": 118,
+      "prompt_tokens": 28,
+      "tok_s": 13.94,
+      "name": "summarize"
+    },
+    {
+      "wall_s": 13.54,
+      "completion_tokens": 192,
+      "prompt_tokens": 29,
+      "tok_s": 14.18,
+      "name": "qa_factual"
+    },
+    {
+      "wall_s": 6.47,
+      "completion_tokens": 87,
+      "prompt_tokens": 33,
+      "tok_s": 13.45,
+      "name": "creative_short"
+    },
+    {
+      "wall_s": 13.77,
+      "completion_tokens": 192,
+      "prompt_tokens": 58,
+      "tok_s": 13.94,
+      "name": "stepwise_math"
+    },
+    {
+      "wall_s": 13.58,
+      "completion_tokens": 192,
+      "prompt_tokens": 55,
+      "tok_s": 14.14,
+      "name": "long_code_review"
+    }
+  ],
+  "aggregate_tok_s": 13.867588292472188,
+  "draft_acceptance": {
+    "spec_types": [
+      "ngram-map-k4v"
+    ]
+  }
+}

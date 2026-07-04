@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -47,21 +46,32 @@ def parse_args() -> argparse.Namespace:
 
 
 def scrape_draft_acceptance() -> dict:
-    """Read the llama-server log tail and extract draft/accept stats."""
+    """Read the llama-server log and extract spec-decode stats.
+
+    llama-server prints, per spec backend, a stats line like:
+        statistics        draft-mtp: #calls(b,g,a) = ..., #acc rate/pos = (...)
+    and per slot:
+        draft acceptance = 0.76923 (   30 accepted /    39 generated), ...
+    The `statistics <name>:` prefix names the backend that actually ran, which
+    lets the bench record the real spec config (e.g. ngram-mod vs draft-mtp vs
+    a combined list) without trusting env vars.
+    """
     if not LOG_PATH.exists():
         return {}
     text = LOG_PATH.read_text(errors="replace")
-    # llama-server prints periodic spec stats like:
-    #   "draft ... accepted ... rate=0.72" or similar. Patterns vary by build;
-    #   grab the most recent aggregate-ish numbers we can find.
     out = {}
-    m = re.findall(r"acc[ept]*[=:]?\s*(\d+)\s*.*?draft[=:]?\s*(\d+)", text, re.I)
-    if m:
-        acc, draft = m[-1]
-        out["last_draft"] = int(draft)
-        out["last_accepted"] = int(acc)
-        if int(draft) > 0:
-            out["last_accept_rate"] = round(int(acc) / int(draft), 3)
+    spec_types: list[str] = []
+    for st in re.findall(r"statistics\s+(\S+):", text):
+        if st not in spec_types:
+            spec_types.append(st)
+    if spec_types:
+        out["spec_types"] = spec_types
+    acc = re.findall(r"draft acceptance = ([0-9.]+) \(\s*(\d+) accepted /\s*(\d+) generated\)", text)
+    if acc:
+        rate, accepted, generated = acc[-1]
+        out["last_accepted"] = int(accepted)
+        out["last_draft"] = int(generated)
+        out["last_accept_rate"] = round(float(rate), 3)
     return out
 
 
@@ -119,7 +129,7 @@ def main() -> int:
         print(f"Aggregate: n={len(ok)}  total_comp={total_comp}  total_wall={total_wall:.2f}s  agg_tok/s={agg_tok_s:.2f}")
     draft = scrape_draft_acceptance()
     if draft:
-        print(f"Draft acceptance (from log): {draft}")
+        print(f"Spec config (from log): {draft}")
     # save json
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = RESULTS_DIR / f"bench_{args.label}.json"

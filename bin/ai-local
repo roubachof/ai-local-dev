@@ -142,16 +142,50 @@ llama_hybrid_flags() {
     printf '%s\n' "${flags[@]}"
 }
 
-# Build MTP flags for a given n-max, or print nothing if LLAMA_MTP=0.
-# On by default: MTP gives a real decode speedup on Apple Silicon/Metal
-# (measured +42% on 27B dense, +23% on 35B-A3B MoE; see bench/README.md).
-# Disable with LLAMA_MTP=0 to skip the MTP draft context.
-llama_mtp_flags() {
+# Build speculative-decoding flags, or print nothing if LLAMA_MTP=0.
+# LLAMA_MTP is the on/off gate; LLAMA_SPEC_TYPE selects the backend(s) (default
+# draft-mtp). n-gram sub-flags are emitted only when their mode is present in the
+# comma-separated LLAMA_SPEC_TYPE list. --spec-draft-n-max uses the per-model
+# n_max only when draft-mtp is in the list (it's tuned for MTP's small window);
+# for ngram-only runs it is left to llama.cpp's default unless LLAMA_SPEC_DRAFT_N_MAX
+# is set. See bench/README.md "n-gram spec-decode axis". On by default: MTP gives
+# a real decode speedup on Apple Silicon/Metal (+42% 27B, +23% 35B-A3B MoE).
+# $1 = per-model draft n-max (from LLAMA_MTP_N_MAX_27B/35B).
+llama_spec_flags() {
     local n_max=$1
     if [[ "$LLAMA_MTP" != "1" ]]; then
         return 0
     fi
-    printf '%s\n' --spec-type draft-mtp --spec-draft-n-max "$n_max"
+    local spec_type="${LLAMA_SPEC_TYPE:-draft-mtp}"
+    printf '%s\n' --spec-type "$spec_type"
+    if [[ -n "${LLAMA_SPEC_DRAFT_N_MAX:-}" ]]; then
+        printf '%s\n' --spec-draft-n-max "$LLAMA_SPEC_DRAFT_N_MAX"
+    elif [[ ",$spec_type," == *",draft-mtp,"* ]]; then
+        printf '%s\n' --spec-draft-n-max "$n_max"
+    fi
+    if [[ -n "${LLAMA_SPEC_DRAFT_P_MIN:-}" ]]; then
+        printf '%s\n' --spec-draft-p-min "$LLAMA_SPEC_DRAFT_P_MIN"
+    fi
+    if [[ ",$spec_type," == *",ngram-mod,"* ]]; then
+        printf '%s\n' --spec-ngram-mod-n-match "${LLAMA_SPEC_NGRAM_MOD_N_MATCH:-24}" \
+                       --spec-ngram-mod-n-min "${LLAMA_SPEC_NGRAM_MOD_N_MIN:-48}" \
+                       --spec-ngram-mod-n-max "${LLAMA_SPEC_NGRAM_MOD_N_MAX:-64}"
+    fi
+    if [[ ",$spec_type," == *",ngram-simple,"* ]]; then
+        printf '%s\n' --spec-ngram-simple-size-n "${LLAMA_SPEC_NGRAM_SIMPLE_SIZE_N:-12}" \
+                       --spec-ngram-simple-size-m "${LLAMA_SPEC_NGRAM_SIMPLE_SIZE_M:-48}" \
+                       --spec-ngram-simple-min-hits "${LLAMA_SPEC_NGRAM_SIMPLE_MIN_HITS:-1}"
+    fi
+    if [[ ",$spec_type," == *",ngram-map-k,"* ]]; then
+        printf '%s\n' --spec-ngram-map-k-size-n "${LLAMA_SPEC_NGRAM_MAP_K_SIZE_N:-12}" \
+                       --spec-ngram-map-k-size-m "${LLAMA_SPEC_NGRAM_MAP_K_SIZE_M:-48}" \
+                       --spec-ngram-map-k-min-hits "${LLAMA_SPEC_NGRAM_MAP_K_MIN_HITS:-1}"
+    fi
+    if [[ ",$spec_type," == *",ngram-map-k4v,"* ]]; then
+        printf '%s\n' --spec-ngram-map-k4v-size-n "${LLAMA_SPEC_NGRAM_MAP_K4V_SIZE_N:-12}" \
+                       --spec-ngram-map-k4v-size-m "${LLAMA_SPEC_NGRAM_MAP_K4V_SIZE_M:-48}" \
+                       --spec-ngram-map-k4v-min-hits "${LLAMA_SPEC_NGRAM_MAP_K4V_MIN_HITS:-1}"
+    fi
 }
 
 # Generalized llama-server launcher.
@@ -185,11 +219,11 @@ start_llama_server_at() {
     while IFS= read -r line; do
         [[ -n "$line" ]] && hybrid+=("$line")
     done < <(llama_hybrid_flags)
-    local -a mtp=()
+    local -a spec=()
     if [[ "$mtp_n_max" != "0" && "$LLAMA_MTP" == "1" ]]; then
         while IFS= read -r line; do
-            [[ -n "$line" ]] && mtp+=("$line")
-        done < <(llama_mtp_flags "$mtp_n_max")
+            [[ -n "$line" ]] && spec+=("$line")
+        done < <(llama_spec_flags "$mtp_n_max")
     fi
     # Build the argv with conditional MTP expansion. Under `set -u`, an empty
     # array "${arr[@]}" is treated as unbound in bash 3.2; guard with ${arr[@]+...}.
@@ -206,8 +240,8 @@ start_llama_server_at() {
         --reasoning-format "$LLAMA_REASONING_FORMAT"
     )
     llama_argv+=("${hybrid[@]}")
-    if [[ ${#mtp[@]} -gt 0 ]]; then
-        llama_argv+=("${mtp[@]}")
+    if [[ ${#spec[@]} -gt 0 ]]; then
+        llama_argv+=("${spec[@]}")
     fi
     nohup "${llama_argv[@]}" \
         > "$AI_LOCAL_LOG_DIR/$log_file" 2>&1 &

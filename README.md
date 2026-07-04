@@ -90,7 +90,8 @@ MTP (Multi-Token Prediction) speculative decoding is **on by default** (`LLAMA_M
 
 Relevant config keys (see `config/.qwen-local.conf`):
 
-- `LLAMA_MTP` — `1` (on, default) / `0` (off). When on, `llama-server` launches with `--spec-type draft-mtp --spec-draft-n-max N`.
+- `LLAMA_MTP` — `1` (on, default) / `0` (off). When on, `llama-server` launches with `--spec-type $LLAMA_SPEC_TYPE --spec-draft-n-max N`.
+- `LLAMA_SPEC_TYPE` — spec-decode backend(s), comma-separated (default `draft-mtp`). Build 9750 also supports `ngram-simple`, `ngram-map-k`, `ngram-map-k4v`, `ngram-mod`, `ngram-cache`. See `bench/README.md` for the n-gram bench axis.
 - `LLAMA_MTP_N_MAX_27B` — `3` (dense 27B: the acceptance sweet spot)
 - `LLAMA_MTP_N_MAX_35B` — `2` (MoE 35B: 3+ degrades acceptance per MoE benchmarks)
 - `QWEN_27B_MTP_MODEL`, `QWEN_35B_MTP_MODEL` — paths to the MTP GGUFs (live under `~/.local/share/llama-models/mtp/`)
@@ -125,6 +126,7 @@ ai-local config
 - [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 - [`docs/THINK_CONTROL.md`](docs/THINK_CONTROL.md)
 - [`docs/NGROK_ENDPOINTS.md`](docs/NGROK_ENDPOINTS.md)
+- [`docs/REMOTE_GPU_WINDOWS.md`](docs/REMOTE_GPU_WINDOWS.md) — 27B on a Windows NVIDIA GPU (RTX 4080 / 16 GB) with IQ3_XXS + MTP
 
 ## License
 
